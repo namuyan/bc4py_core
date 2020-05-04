@@ -1,5 +1,6 @@
 use crate::utils::*;
 use bigint::U256;
+use std::cmp::{Ordering, PartialEq, PartialOrd};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +39,39 @@ impl PartialEq for Balances {
     }
 }
 
+impl PartialOrd for Balances {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // get (self - other) balance
+        let mut balances = self.clone();
+        other
+            .0
+            .iter()
+            .for_each(|_balance| balances.sub_balance(_balance));
+        balances.compaction();
+        // check all plus or minus
+        let mut all_lesser = true;
+        let mut all_greater = true;
+        for balance in balances.0.iter() {
+            if 0 < balance.amount {
+                all_lesser = false;
+            }
+            if 0 > balance.amount {
+                all_greater = false;
+            }
+        }
+        // return ordering type
+        if all_lesser && all_greater {
+            Some(Ordering::Equal) // self = other
+        } else if all_lesser {
+            Some(Ordering::Less) // self < other
+        } else if all_greater {
+            Some(Ordering::Greater) // self > other
+        } else {
+            None // cannot define lesser or greater
+        }
+    }
+}
+
 impl Balances {
     /// remove zero balance
     pub fn compaction(&mut self) {
@@ -55,10 +89,18 @@ impl Balances {
         self.0.iter().map(|balance| balance.amount).sum()
     }
 
-    pub fn get_balance_by(&self, coin_id: u32) -> Option<i64> {
+    pub fn get_amount_by(&self, coin_id: u32) -> Option<i64> {
         match self.0.iter().find(|b| b.coin_id == coin_id) {
             Some(b) => Some(b.amount),
             None => None,
+        }
+    }
+
+    pub fn add(&mut self, coin_id: u32, amount: u64) {
+        let amount = amount as i64;
+        match self.0.iter_mut().find(|_b| _b.coin_id == coin_id) {
+            Some(balance) => balance.amount += amount,
+            None => self.0.push(Balance { coin_id, amount }),
         }
     }
 
@@ -89,8 +131,8 @@ pub enum MovementType {
 }
 
 pub struct BalanceMovement {
-    pub hash: U256, // txhash
-    fee: Balances,  // note: unused
+    pub hash: U256,    // txhash
+    pub fee: Balances, // note: unused
     outgoing: Balances,
     incoming: Vec<(u32, bool, Balance)>, // (accountId, isInner, balance)
 }
@@ -251,7 +293,7 @@ impl BalanceMovement {
                 if !is_inner {
                     continue;
                 }
-                match base.get_balance_by(coin_id) {
+                match base.get_amount_by(coin_id) {
                     Some(amount_base) => {
                         let amount_in = balance_in.amount;
                         let sub = Balance {

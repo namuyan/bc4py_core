@@ -1,4 +1,4 @@
-from typing import *
+from typing import Tuple, Sequence, Optional, Iterator
 
 """
 Address
@@ -10,7 +10,10 @@ class PyAddress:
     @classmethod
     def from_string(cls, string: str) -> None: ...
     def to_string(self, hrp: str) -> str: ...
-    def identifier(self) -> bytes: ...
+    def identifier(self) -> bytes:
+        """20 bytes"""
+    def binary(self) -> bytes:
+        """21 bytes"""
 
 
 """
@@ -28,6 +31,7 @@ class PyTxInputs:
     def len(self) -> int: ...
     def get(self, index: int) -> Optional[TxInput]: ...
     def add(self, hash: bytes, index: int) -> None: ...
+    def push(self, unspent: PyUnspent) -> None: ...
     def pop(self, index: Optional[int]) -> TxInput: ...
     def extend(self, value: PyTxInputs) -> None: ...
     def clear(self) -> None: ...
@@ -139,6 +143,42 @@ class PySignature:
 
 
 """
+Unspent
+"""
+
+class PyUnspent:
+    txhash: bytes
+    txindex: int
+    address: PyAddress
+    coin_id: int
+    amount: int
+
+"""
+Account
+"""
+
+class PyBalance:
+    def __init__(self, balance: Optional[Sequence[Tuple[int, int]]]) -> None: ...
+    def __iter__(self) -> Iterator[Tuple[int, int]]: ...
+    def get_amount(self, coin_id: int) -> int: ...
+    def add_amount(self, coin_id: int, amount: int) -> None: ...
+    def marge_balance(self, balance: PyBalance) -> None: ...
+
+
+class PyMovement:
+    hash: bytes
+    type: str
+    movement: Sequence[Tuple[int, PyBalance]]
+    fee: PyBalance
+
+
+class PyAccount:
+    account_id: int
+    confirmed: PyBalance
+    unconfirmed: PyBalance
+
+
+"""
 Chain
 """
 
@@ -158,4 +198,7 @@ class PyChain:
     def push_unconfirmed(self, tx: PyTx) -> None: ...
     def get_block(self, hash: bytes) -> Optional[PyBlock]: ...
     def get_tx(self, hash: bytes) -> Optional[PyTx]: ...
+    def get_account_balance(self, account_id: int, confirm: int) -> PyAccount: ...
+    def calc_unspent_by_amount(self, balances: PyBalance) -> Sequence[PyUnspent]: ...
+    def list_unspent_by_addr(self, addrs: Sequence[PyAddress], page: int, size: int) -> Sequence[PyUnspent]: ...
     def close(self) -> None: ...

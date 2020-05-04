@@ -1,5 +1,6 @@
 use crate::python::pychain::PyChain;
 use crate::python::pysigature::PySignature;
+use crate::python::pyunspent::PyUnspent;
 use crate::tx::*;
 use crate::utils::{u256_to_bytes, write_slice};
 use bigint::U256;
@@ -61,6 +62,15 @@ impl PyTxInputs {
         }
     }
 
+    fn push(&mut self, unspent: PyRef<PyUnspent>) -> PyResult<()> {
+        if 255 <= self.inputs.len() {
+            Err(ValueError::py_err("inputs size is limited to 255u8"))
+        } else {
+            self.inputs.push(unspent.clone_input());
+            Ok(())
+        }
+    }
+
     fn pop(&mut self, py: Python, index: Option<u8>) -> PyResult<PyObject> {
         let removed = if index.is_some() {
             let index = index.unwrap() as usize;
@@ -85,13 +95,12 @@ impl PyTxInputs {
         Ok(PyTuple::new(py, &[hash, index]).to_object(py))
     }
 
-    fn extend(&mut self, value: &PyCell<PyTxInputs>) -> PyResult<()> {
-        let extra = value.borrow();
-        if 255 <= self.inputs.len() + extra.inputs.len() {
+    fn extend(&mut self, value: PyRef<PyTxInputs>) -> PyResult<()> {
+        if 255 <= self.inputs.len() + value.inputs.len() {
             Err(ValueError::py_err("too many inputs to extend"))
         } else {
             self.inputs.extend(
-                extra
+                value
                     .inputs
                     .iter()
                     .map(|item| item.clone())
@@ -393,7 +402,7 @@ impl PyTx {
         let mut inputs_cache = Vec::with_capacity(inputs_rc.inputs.len());
         for input in inputs_rc.inputs.iter() {
             match chain
-                .chain
+                .lock()
                 .get_output_of_input(input, true)
                 .map_err(|err| ValueError::py_err(err))?
             {

@@ -61,15 +61,10 @@ impl PyAddress {
         // return 20 bytes ripemd160(sha256()) hashed
         PyBytes::new(py, &self.addr[1..21]).to_object(py)
     }
-}
 
-impl PyAddress {
-    pub fn from_address(addr: Address) -> Self {
-        PyAddress { addr }
-    }
-
-    pub fn clone_to_identifier(self) -> Address {
-        self.addr
+    fn binary(&self, py: Python) -> PyObject {
+        // return 21 bytes
+        PyBytes::new(py, &self.addr).to_object(py)
     }
 }
 
@@ -83,7 +78,7 @@ mod utils {
     pub fn string2addr(string: &str) -> Result<Address, Error> {
         // return [ver+identifier] bytes
         match addr2params(string) {
-            Ok((_, ver, mut identifier)) => {
+            Ok((_, ver, identifier)) => {
                 let mut addr = [ver; 21];
                 write_slice(&mut addr[1..21], &identifier);
                 Ok(addr)
