@@ -71,10 +71,10 @@ impl PySignature {
     }
 
     fn add_from_binary(&mut self, binary: &PyBytes) -> PyResult<()> {
-        self.signs
-            .push(bytes_to_signature(binary.as_bytes()).map_err(|err| {
-                ValueError::py_err(format!("failed to add sign from binary: {}", err))
-            })?);
+        self.signs.push(
+            bytes_to_signature(binary.as_bytes())
+                .map_err(|err| ValueError::py_err(format!("failed to add sign from binary: {}", err)))?,
+        );
         Ok(())
     }
 }

@@ -349,11 +349,7 @@ impl Tx {
             signature_vec.push(signature);
         }
         if bytes.len() != position {
-            return Err(format!(
-                "signature decode failed {}!={}",
-                bytes.len(),
-                position
-            ));
+            return Err(format!("signature decode failed {}!={}", bytes.len(), position));
         }
         self.signature = Some(signature_vec);
         Ok(())
@@ -391,16 +387,14 @@ mod tx {
     #[test]
     fn body_encode_decode() {
         let binary = hex::decode("0000000002000000e1feaa011129ab0100000000000000000000000000000000000101000000001d8b62ab6307ac224374b6eda408f8d7048457bcc536b26ac7e5ec542df3581800005bafa406ba6f53f4573a4d5a8f17615e61d71ab20000000036b8071403000000").unwrap();
-        let hash = hex::decode("602e270e18879f99bdb2e2ff19e6dfd0df127ef7a2eb40ceec3e92f477f92353")
-            .unwrap();
+        let hash = hex::decode("602e270e18879f99bdb2e2ff19e6dfd0df127ef7a2eb40ceec3e92f477f92353").unwrap();
         let genesis_time = 1557883103;
         let inputs = vec![TxInput(
             string_to_u256("1d8b62ab6307ac224374b6eda408f8d7048457bcc536b26ac7e5ec542df35818"),
             0,
         )];
 
-        let (_hrp, ver, data) =
-            addr2params("test1qtwh6gp46daflg4e6f4dg79mptesawx4j4gy0dl").unwrap();
+        let (_hrp, ver, data) = addr2params("test1qtwh6gp46daflg4e6f4dg79mptesawx4j4gy0dl").unwrap();
         let mut address = [0u8; 21];
         address[0] = ver;
         write_slice(&mut address[1..21], data.as_slice());
@@ -428,20 +422,14 @@ mod tx {
 
     #[test]
     fn sign_encode_decode() {
-        let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
-            .unwrap();
-        let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6")
-            .unwrap(); // r
-        let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05")
-            .unwrap(); // s
+        let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798").unwrap();
+        let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6").unwrap(); // r
+        let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05").unwrap(); // s
         let sig0 = Signature::new_single_sig(&pk, &r, &s).unwrap();
 
-        let pk = hex::decode("0226d77f91bcfe366a4f9390c38a7c03d025e541940a881cca98ac4237a0352537")
-            .unwrap();
-        let r = hex::decode("69039691323f6d26a1ab2903730496cf3247f258b438abdbd350e3cf2814e368")
-            .unwrap();
-        let s = hex::decode("3c179ac0a44fa7f25c3f734ff9e29a85f9be1ea541a92ceb542882ab95e8aa2a")
-            .unwrap();
+        let pk = hex::decode("0226d77f91bcfe366a4f9390c38a7c03d025e541940a881cca98ac4237a0352537").unwrap();
+        let r = hex::decode("69039691323f6d26a1ab2903730496cf3247f258b438abdbd350e3cf2814e368").unwrap();
+        let s = hex::decode("3c179ac0a44fa7f25c3f734ff9e29a85f9be1ea541a92ceb542882ab95e8aa2a").unwrap();
         let sig1 = Signature::new_aggregate_sig(&pk, &r, &s).unwrap();
 
         // dummy

@@ -68,10 +68,7 @@ impl Account {
         account.balance.0.reserve(balance_len);
         let mut pos = 74;
         while pos < bytes.len() {
-            account
-                .balance
-                .0
-                .push(Balance::from_bytes(&bytes[pos..pos + 12]));
+            account.balance.0.push(Balance::from_bytes(&bytes[pos..pos + 12]));
             pos += 12;
         }
 
@@ -96,11 +93,7 @@ impl Account {
     fn check_and_expand_listen(&mut self, addr: &Address) -> Result<Option<bool>, Error> {
         // check inner
         if self.listen_inner.contains(addr) {
-            let addr_index = self
-                .listen_inner
-                .iter()
-                .position(|_addr| _addr == addr)
-                .unwrap();
+            let addr_index = self.listen_inner.iter().position(|_addr| _addr == addr).unwrap();
             let next_index = self.listen_inner.len();
 
             // expand
@@ -116,11 +109,7 @@ impl Account {
 
         // check outer
         if self.listen_outer.contains(addr) {
-            let addr_index = self
-                .listen_outer
-                .iter()
-                .position(|_addr| _addr == addr)
-                .unwrap();
+            let addr_index = self.listen_outer.iter().position(|_addr| _addr == addr).unwrap();
             let next_index = self.listen_outer.len();
 
             // expand
@@ -256,8 +245,7 @@ impl AccountBuilder {
             let key = sk.derive_private_key(key_index)?;
             let root_key = ExtendedPubKey::from_private_key(&key);
             let account = Account::new(account_id, false, root_key)?;
-            cur.write_account_state(account_id, &account.to_bytes())
-                .unwrap();
+            cur.write_account_state(account_id, &account.to_bytes()).unwrap();
             accounts.push(account);
         }
         Ok(AccountBuilder {
@@ -282,10 +270,7 @@ impl AccountBuilder {
         Ok(AccountBuilder { root_key, accounts })
     }
 
-    pub fn get_new_account<'a>(
-        &'a mut self,
-        cur: &mut TableCursor,
-    ) -> Result<&'a mut Account, String> {
+    pub fn get_new_account<'a>(&'a mut self, cur: &mut TableCursor) -> Result<&'a mut Account, String> {
         match self
             .accounts
             .iter_mut()
@@ -293,9 +278,7 @@ impl AccountBuilder {
         {
             Some(account_id) => {
                 // expand if too few capacity
-                if self.root_key.is_some()
-                    && self.accounts.len() < account_id + PRE_FETCH_ACCOUNT_LEN
-                {
+                if self.root_key.is_some() && self.accounts.len() < account_id + PRE_FETCH_ACCOUNT_LEN {
                     self.expand_account_capacity(cur)
                         .map_err(|err| format!("{:?}", err))?;
                 }

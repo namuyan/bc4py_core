@@ -286,9 +286,7 @@ impl Tables {
                     let mut offset = bytes_to_u32(&value[4..4 + 4]) as usize;
 
                     // get binary
-                    let blockhash = self
-                        .read_block_index(height)?
-                        .expect("get blockhash but none");
+                    let blockhash = self.read_block_index(height)?.expect("get blockhash but none");
                     let blockhash = u256_to_bytes(&blockhash);
                     let bytes = self
                         .block
@@ -358,8 +356,7 @@ impl Tables {
         // [coin_id u32][height u32][index u32] -> [txhash 32b][params ?][setting ?]
         let mut key = [0u8; 4 + 4 + 4];
         write_slice(&mut key[0..4], &u32_to_bytes(coin_id));
-        self.mint
-            .iterator(IteratorMode::From(&key, Direction::Forward));
+        self.mint.iterator(IteratorMode::From(&key, Direction::Forward));
         unimplemented!("read mint")
     }
 
@@ -436,16 +433,10 @@ impl TableCursor<'_> {
 
         // write
         self.tables.block.write_opt(self.block, &writeopts)?;
-        self.tables
-            .block_index
-            .write_opt(self.block_index, &writeopts)?;
-        self.tables
-            .utxo_index
-            .write_opt(self.utxo_index, &writeopts)?;
+        self.tables.block_index.write_opt(self.block_index, &writeopts)?;
+        self.tables.utxo_index.write_opt(self.utxo_index, &writeopts)?;
         self.tables.tx_index.write_opt(self.tx_index, &writeopts)?;
-        self.tables
-            .addr_index
-            .write_opt(self.addr_index, &writeopts)?;
+        self.tables.addr_index.write_opt(self.addr_index, &writeopts)?;
         self.tables.mint.write_opt(self.mint, &writeopts)?;
         self.tables.account.write_opt(self.account, &writeopts)?;
         self.tables.movement.write_opt(self.movement, &writeopts)?;
@@ -470,9 +461,7 @@ impl TableCursor<'_> {
         let key = big_endian_from_u32(height);
         let value = sha256double(&header.to_bytes());
 
-        self.block_index
-            .put(&key, &value)
-            .map_err(|err| err.to_string())
+        self.block_index.put(&key, &value).map_err(|err| err.to_string())
     }
 
     pub fn write_utxo_index(&mut self, tx: &Tx) -> Result<(), String> {
@@ -498,11 +487,7 @@ impl TableCursor<'_> {
         Ok(())
     }
 
-    pub fn write_tx_index(
-        &mut self,
-        blockhash: &U256,
-        indexed_txs: &Vec<U256>,
-    ) -> Result<(), String> {
+    pub fn write_tx_index(&mut self, blockhash: &U256, indexed_txs: &Vec<U256>) -> Result<(), String> {
         // [txhash 32b] -> [height u32][offset u32]
         // note: block is already recoded
         // note: recode only specific txs
@@ -611,21 +596,14 @@ impl TableCursor<'_> {
             .map_err(|err| err.to_string())
     }
 
-    pub fn update_movement_status(
-        &mut self,
-        hash: &U256,
-        height: u32,
-        position: u32,
-    ) -> Result<(), String> {
+    pub fn update_movement_status(&mut self, hash: &U256, height: u32, position: u32) -> Result<(), String> {
         // change key [txhash 32b] to [height u32][position u32]
         let old_key = u256_to_bytes(hash).to_vec();
         match self.tables.movement.get(&old_key) {
             Ok(value) => match value {
                 Some(value) => {
                     // delete old
-                    self.movement
-                        .delete(&old_key)
-                        .map_err(|err| err.to_string())?;
+                    self.movement.delete(&old_key).map_err(|err| err.to_string())?;
                     // insert new
                     let mut new_key = Vec::with_capacity(4 + 4);
                     new_key.extend_from_slice(&u32_to_bytes(height));
@@ -649,17 +627,13 @@ impl TableCursor<'_> {
         // non-coinbase tx
         let key = sha256double(&tx.to_bytes());
         let value = pickle_mempool(tx)?;
-        self.mempool
-            .put(&key, &value)
-            .map_err(|err| err.to_string())
+        self.mempool.put(&key, &value).map_err(|err| err.to_string())
     }
 
     pub fn remove_from_mempool(&mut self, hash: &U256) -> Result<(), String> {
         // [txhash 32b] -> [mempool bytes Xb]
         let key = u256_to_bytes(hash);
-        self.mempool
-            .delete(key.as_ref())
-            .map_err(|err| err.to_string())
+        self.mempool.delete(key.as_ref()).map_err(|err| err.to_string())
     }
 }
 
@@ -770,27 +744,21 @@ mod table_test {
         // write
         let pre_addr = &[2u8; 21];
         let output0 = TxOutput(pre_addr.clone(), 1121, 55);
-        let txhash0 =
-            string_to_u256("cd8bebe511aab4b85e2ab6a8b8629d8804d4c0ee30f234a653487f545f073fe9");
+        let txhash0 = string_to_u256("cd8bebe511aab4b85e2ab6a8b8629d8804d4c0ee30f234a653487f545f073fe9");
         let output_index0 = 3;
-        cur.write_addr_index(&output0, &txhash0, output_index0)
-            .unwrap();
+        cur.write_addr_index(&output0, &txhash0, output_index0).unwrap();
 
         let addr = &[3u8; 21];
         let output1 = TxOutput(addr.clone(), 4445, 3543);
-        let txhash1 =
-            string_to_u256("ff8d87eaa33aec3d901b9761f4f3b9c83cf395f55e233739a894b2174430e82c");
+        let txhash1 = string_to_u256("ff8d87eaa33aec3d901b9761f4f3b9c83cf395f55e233739a894b2174430e82c");
         let output_index1 = 2;
-        cur.write_addr_index(&output1, &txhash1, output_index1)
-            .unwrap();
+        cur.write_addr_index(&output1, &txhash1, output_index1).unwrap();
 
         let post_addr = &[4u8; 21];
         let output2 = TxOutput(post_addr.clone(), 45, 5008);
-        let txhash2 =
-            string_to_u256("3a7d5c3a627f6f9eab9360373d6e40487e6a09c89d45e997c1748c08f47baf52");
+        let txhash2 = string_to_u256("3a7d5c3a627f6f9eab9360373d6e40487e6a09c89d45e997c1748c08f47baf52");
         let output_index2 = 0;
-        cur.write_addr_index(&output2, &txhash2, output_index2)
-            .unwrap();
+        cur.write_addr_index(&output2, &txhash2, output_index2).unwrap();
 
         cur.commit().unwrap();
 

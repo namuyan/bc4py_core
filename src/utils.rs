@@ -95,8 +95,6 @@ pub fn sha256ripemd160(ver: u8, pk: &[u8]) -> Address {
 #[inline]
 pub fn get_current_time() -> f32 {
     let start = SystemTime::now();
-    let since_the_epoch = start
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards");
+    let since_the_epoch = start.duration_since(UNIX_EPOCH).expect("Time went backwards");
     since_the_epoch.as_secs_f32()
 }

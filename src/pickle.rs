@@ -97,7 +97,6 @@ pub fn unpickle_full_block(bytes: &[u8]) -> Result<(Block, Vec<Tx>, Vec<usize>),
 
     // check
     if pos == bytes.len() {
-        let txs_hash = txs_hash.into_boxed_slice();
         let block = Block {
             work_hash,
             height,
@@ -145,7 +144,6 @@ pub fn unpickle_block(bytes: &[u8]) -> Result<Block, String> {
 
     // check
     if pos == bytes.len() {
-        let txs_hash = txs_hash.into_boxed_slice();
         Ok(Block {
             work_hash,
             height,
@@ -225,17 +223,14 @@ mod test {
 
         // dummy tx
         let mut tx = Tx::new(2, TxType::Transfer, 100, 200, 300, 100, TxMessage::Nothing);
-        let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
-            .unwrap();
-        let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6")
-            .unwrap(); // r
-        let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05")
-            .unwrap(); // s
+        let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798").unwrap();
+        let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6").unwrap(); // r
+        let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05").unwrap(); // s
         let sig = Signature::new_single_sig(&pk, &r, &s).unwrap();
         tx.signature = Some(vec![sig]);
 
         let txs = vec![coinbase, tx];
-        let tx_hash: Box<[U256]> = txs.iter().map(|_tx| _tx.hash()).collect();
+        let tx_hash: Vec<U256> = txs.iter().map(|_tx| _tx.hash()).collect();
 
         // dummy block
         let header = BlockHeader {
@@ -243,15 +238,10 @@ mod test {
             time: 2,
             bits: 0x1effffff,
             nonce: 3,
-            previous_hash: string_to_u256(
-                "171fadce3703d6f7624c49a22ca7984a2b8a31bb1dd532e1dd47f754458ea845",
-            ),
-            merkleroot: string_to_u256(
-                "016056c4b0a8f0a773934916f08a9cf6819ea56d8148d12ee6615e87b29b523c",
-            ),
+            previous_hash: string_to_u256("171fadce3703d6f7624c49a22ca7984a2b8a31bb1dd532e1dd47f754458ea845"),
+            merkleroot: string_to_u256("016056c4b0a8f0a773934916f08a9cf6819ea56d8148d12ee6615e87b29b523c"),
         };
-        let work_hash =
-            string_to_u256("1281ff15ded46eecf06c4c65f2c63736680ec798e8fb4d1e1be005a100000000");
+        let work_hash = string_to_u256("1281ff15ded46eecf06c4c65f2c63736680ec798e8fb4d1e1be005a100000000");
         let mut block = Block::new(work_hash, 1000, BlockFlag::Genesis, 1.2, header, tx_hash);
 
         (block, txs)
@@ -286,20 +276,14 @@ mod test {
 
     #[test]
     fn mempool() {
-        let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
-            .unwrap();
-        let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6")
-            .unwrap(); // r
-        let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05")
-            .unwrap(); // s
+        let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798").unwrap();
+        let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6").unwrap(); // r
+        let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05").unwrap(); // s
         let sig0 = Signature::new_single_sig(&pk, &r, &s).unwrap();
 
-        let pk = hex::decode("0226d77f91bcfe366a4f9390c38a7c03d025e541940a881cca98ac4237a0352537")
-            .unwrap();
-        let r = hex::decode("69039691323f6d26a1ab2903730496cf3247f258b438abdbd350e3cf2814e368")
-            .unwrap();
-        let s = hex::decode("3c179ac0a44fa7f25c3f734ff9e29a85f9be1ea541a92ceb542882ab95e8aa2a")
-            .unwrap();
+        let pk = hex::decode("0226d77f91bcfe366a4f9390c38a7c03d025e541940a881cca98ac4237a0352537").unwrap();
+        let r = hex::decode("69039691323f6d26a1ab2903730496cf3247f258b438abdbd350e3cf2814e368").unwrap();
+        let s = hex::decode("3c179ac0a44fa7f25c3f734ff9e29a85f9be1ea541a92ceb542882ab95e8aa2a").unwrap();
         let sig1 = Signature::new_aggregate_sig(&pk, &r, &s).unwrap();
 
         // dummy

@@ -26,9 +26,7 @@ impl PyUnspent {
 
     #[getter(address)]
     fn get_address(&self) -> PyAddress {
-        PyAddress {
-            addr: self.output.0,
-        }
+        PyAddress { addr: self.output.0 }
     }
 
     #[getter(coin_id)]

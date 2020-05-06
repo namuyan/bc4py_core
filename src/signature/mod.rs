@@ -19,10 +19,9 @@ pub enum Signature {
 impl std::fmt::Debug for Signature {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Signature::SingleSig((pk, _, _)) => f
-                .debug_tuple("Single")
-                .field(&hex::encode(&pk[1..33]))
-                .finish(),
+            Signature::SingleSig((pk, _, _)) => {
+                f.debug_tuple("Single").field(&hex::encode(&pk[1..33])).finish()
+            },
             Signature::AggregateSig((pk, _, _)) => f
                 .debug_tuple("Aggregate")
                 .field(&hex::encode(&pk[1..33]))

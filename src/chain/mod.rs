@@ -23,8 +23,8 @@ use std::path::Path;
 
 /// genesis block's previous_hash is "ffff..ffff"
 const GENESIS_PREVIOUS_HASH: [u8; 32] = [
-    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 ];
 type Address = [u8; 21];
 
@@ -66,8 +66,7 @@ impl Chain {
         let unconfirmed = if tables.initialized {
             UnconfirmedBuilder::new()
         } else {
-            let mut unconfirmed: _ =
-                UnconfirmedBuilder::restore_from_mempool(&tables, &best_chain)?;
+            let mut unconfirmed: _ = UnconfirmedBuilder::restore_from_mempool(&tables, &best_chain)?;
             let mut cur = tables.transaction();
             unconfirmed.remove_expired_txs(deadline, &mut cur);
             cur.commit().unwrap();
@@ -254,11 +253,7 @@ impl Chain {
         Ok(None)
     }
 
-    pub fn get_output_of_input(
-        &self,
-        input: &TxInput,
-        ignore: bool,
-    ) -> Result<Option<TxOutput>, String> {
+    pub fn get_output_of_input(&self, input: &TxInput, ignore: bool) -> Result<Option<TxOutput>, String> {
         // find output of unused input (to fill input_cache)
         // note: return none if already used or not exist
         // note: `ignore` flag let me return output even if it is already used
@@ -267,13 +262,8 @@ impl Chain {
         let mut output: Option<TxOutput> = self.tables.read_utxo_index(input)?;
 
         // from confirmed
-        self.confirmed.find_output_of_input(
-            &self.best_chain,
-            input,
-            &mut output,
-            ignore,
-            &self.tables,
-        )?;
+        self.confirmed
+            .find_output_of_input(&self.best_chain, input, &mut output, ignore, &self.tables)?;
 
         // from unconfirmed
         self.unconfirmed
@@ -286,17 +276,13 @@ impl Chain {
 // get account info
 // `best_chain` is specified to `self.best_chain`
 impl Chain {
+    /// iterate unspent from old to new
     pub fn get_unspent_iter_by(&self, addr: &Address) -> Result<UnspentIter, String> {
         // 特定のアドレスに関連したunspentを返す
         if !self.tables.table_opts.addr_index {
             return Err("is not unspent indexed because addr_index is false".to_owned());
         }
-        let best_chain_rev: BlockHashVec = self
-            .best_chain
-            .iter()
-            .rev()
-            .map(|hash| hash.clone())
-            .collect();
+        let best_chain_rev: BlockHashVec = self.best_chain.iter().rev().map(|hash| hash.clone()).collect();
         let addr = addr.clone();
         Ok(UnspentIter {
             table_iter: self.tables.read_addr_iter(&addr),
@@ -316,11 +302,7 @@ impl Chain {
     }
 
     /// return (confirmed, unconfirmed) balance
-    pub fn get_account_balance(
-        &self,
-        account_id: u32,
-        confirm: u32,
-    ) -> Result<(Balances, Balances), String> {
+    pub fn get_account_balance(&self, account_id: u32, confirm: u32) -> Result<(Balances, Balances), String> {
         // note: incoming is confirmed when `confirm` height passed
         // note: outgoing is instantly reflected from unconfirmed status
 
@@ -330,10 +312,7 @@ impl Chain {
         let mut unconfirmed = Balances(vec![]);
 
         // from confirmed
-        let best_hash = self
-            .best_chain
-            .first()
-            .ok_or("cannot get best_hash".to_owned())?;
+        let best_hash = self.best_chain.first().ok_or("cannot get best_hash".to_owned())?;
         let best_block = self.confirmed.get_block_ref(best_hash).unwrap();
         for blockhash in self.best_chain.iter().rev() {
             let block = self.confirmed.get_block_ref(blockhash).unwrap();

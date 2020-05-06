@@ -179,9 +179,7 @@ impl PyTxOutputs {
                 let addr = PyBytes::new(py, output.0.as_ref()).to_object(py);
                 let coin_id = output.1.to_object(py);
                 let amount = output.2.to_object(py);
-                Ok(Some(
-                    PyTuple::new(py, &[addr, coin_id, amount]).to_object(py),
-                ))
+                Ok(Some(PyTuple::new(py, &[addr, coin_id, amount]).to_object(py)))
             },
             None => Ok(None),
         }
@@ -262,9 +260,7 @@ impl PyIterProtocol for PyTxOutputs {
                 let addr = PyBytes::new(py, output.0.as_ref()).to_object(py);
                 let coin_id = output.1.to_object(py);
                 let amount = output.2.to_object(py);
-                Ok(Some(
-                    PyTuple::new(py, &[addr, coin_id, amount]).to_object(py),
-                ))
+                Ok(Some(PyTuple::new(py, &[addr, coin_id, amount]).to_object(py)))
             },
             None => {
                 // clear iterator status

@@ -41,10 +41,7 @@ impl UnconfirmedBuilder {
         }
     }
 
-    pub fn restore_from_mempool(
-        tables: &Tables,
-        best_chain: &BlockHashVec,
-    ) -> Result<Self, String> {
+    pub fn restore_from_mempool(tables: &Tables, best_chain: &BlockHashVec) -> Result<Self, String> {
         // unconfirmed = mempool - best_chain's txs
         let mut include_txs = vec![];
         for blockhash in best_chain {
@@ -65,10 +62,7 @@ impl UnconfirmedBuilder {
     }
 
     pub fn have_the_tx(&self, hash: &U256) -> bool {
-        self.unconfirmed
-            .iter()
-            .position(|tx| &tx.hash == hash)
-            .is_some()
+        self.unconfirmed.iter().position(|tx| &tx.hash == hash).is_some()
     }
 
     pub fn get_priority(&self, hash: &U256) -> Option<usize> {
@@ -419,10 +413,7 @@ impl Iterator for UnconfirmedIter<'_> {
                 Some(unconfirmed) => {
                     self.index += 1;
                     if self.filter.is_some() {
-                        if unconfirmed
-                            .depend_addrs
-                            .check(self.filter.as_ref().unwrap())
-                        {
+                        if unconfirmed.depend_addrs.check(self.filter.as_ref().unwrap()) {
                             // maybe the unconfirmed is related..
                             return Some(unconfirmed.hash);
                         }

@@ -1,10 +1,5 @@
 use crate::balance::BalanceMovement;
-use crate::chain::{
-    account::AccountAddrIter,
-    confirmed::BlockHashVec,
-    unconfirmed::UnconfirmedIter,
-    Chain,
-};
+use crate::chain::{account::AccountAddrIter, confirmed::BlockHashVec, unconfirmed::UnconfirmedIter, Chain};
 use crate::tx::{TxInput, TxOutput};
 use crate::utils::*;
 use bigint::U256;
@@ -194,10 +189,7 @@ impl Iterator for AccountUnspentIter<'_> {
                         self.unspent_iter = Some(UnspentIter {
                             table_iter: self.chain.tables.read_addr_iter(&addr),
                             confirmed_iter: best_chain_rev.into_iter(),
-                            unconfirmed_iter: self
-                                .chain
-                                .unconfirmed
-                                .filtered_unconfirmed_iter(Some(addr)),
+                            unconfirmed_iter: self.chain.unconfirmed.filtered_unconfirmed_iter(Some(addr)),
                             addr,
                             chain: self.chain,
                         });

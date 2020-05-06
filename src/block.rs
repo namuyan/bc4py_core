@@ -1,7 +1,7 @@
 use crate::utils::*;
 use bigint::U256;
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct BlockHeader {
     pub version: u32,        // 4bytes int
     pub previous_hash: U256, // 32bytes bin
@@ -98,7 +98,7 @@ pub struct Block {
     pub header: BlockHeader,
 
     // block body
-    pub txs_hash: Box<[U256]>,
+    pub txs_hash: Vec<U256>,
 }
 
 impl std::fmt::Debug for Block {
@@ -112,8 +112,7 @@ impl std::fmt::Debug for Block {
 // base = 0x00000000ffff0000000000000000000000000000000000000000000000000000
 // bax  = 0xffff000000000000000000000000000000000000000000000000000000000000
 static MAX_TARGET: [u8; 32] = [
-    255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0,
+    255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 impl Block {
@@ -123,7 +122,7 @@ impl Block {
         flag: BlockFlag,
         bias: f32,
         header: BlockHeader,
-        txs_hash: Box<[U256]>,
+        txs_hash: Vec<U256>,
     ) -> Self {
         Block {
             work_hash,
@@ -189,8 +188,7 @@ mod target_bits {
         assert_eq!(bits, target_to_bits(&target));
 
         let work_hash =
-            hex::decode("000000000000034a7dedef4a161fa058a2d67a173a90155f3a2fe6fc132e0ebf")
-                .unwrap();
+            hex::decode("000000000000034a7dedef4a161fa058a2d67a173a90155f3a2fe6fc132e0ebf").unwrap();
         let work = U256::from(work_hash.as_slice());
         assert!(target > work);
     }

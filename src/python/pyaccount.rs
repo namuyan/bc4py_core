@@ -90,6 +90,10 @@ impl PyIterProtocol for PyBalance {
 
 #[pyclass]
 pub struct PyMovement {
+    #[pyo3(get)]
+    pub height: Option<u32>,
+    #[pyo3(get)]
+    pub position: Option<u32>,
     pub movement: BalanceMovement,
 }
 

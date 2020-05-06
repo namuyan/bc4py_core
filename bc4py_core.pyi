@@ -1,4 +1,4 @@
-from typing import Tuple, Sequence, Optional, Iterator
+from typing import Tuple, List, Sequence, Optional, Iterator
 
 """
 Address
@@ -115,7 +115,7 @@ class PyBlock:
     # header
     header: PyHeader
     # body
-    txs_hash: Sequence[bytes]
+    txs_hash: List[bytes]
 
     def __init__(
             self,
@@ -125,6 +125,7 @@ class PyBlock:
             header: PyHeader,
             txs_hash: Sequence[bytes]
     ) -> None: ...
+    def update_merkleroot(self) -> None: ...
 
 
 """
@@ -168,6 +169,8 @@ class PyBalance:
 class PyMovement:
     hash: bytes
     type: str
+    height: Optional[int]
+    position: Optional[int]
     movement: Sequence[Tuple[int, PyBalance]]
     fee: PyBalance
 
@@ -201,4 +204,5 @@ class PyChain:
     def get_account_balance(self, account_id: int, confirm: int) -> PyAccount: ...
     def calc_unspent_by_amount(self, balances: PyBalance) -> Sequence[PyUnspent]: ...
     def list_unspent_by_addr(self, addrs: Sequence[PyAddress], page: int, size: int) -> Sequence[PyUnspent]: ...
+    def list_account_movement(self, page: int, size: int) -> Sequence[PyMovement]: ...
     def close(self) -> None: ...

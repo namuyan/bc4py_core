@@ -51,9 +51,7 @@ impl PyChain {
         if chain.tables.is_closed {
             return Err(ValueError::py_err("already closed!"));
         }
-        let block: Block = block
-            .clone_to_block()
-            .map_err(|_err| TypeError::py_err(_err))?;
+        let block: Block = block.clone_to_block().map_err(|_err| TypeError::py_err(_err))?;
         let txs = txs.iter().map(|_tx| _tx.clone_to_tx()).collect::<Vec<Tx>>();
 
         // note: push txs to unconfirmed before
@@ -70,9 +68,7 @@ impl PyChain {
         }
         let tx = tx.clone_to_tx();
         if tx.is_coinbase() {
-            return Err(ValueError::py_err(
-                "you try to push coinbase as unconfirmed",
-            ));
+            return Err(ValueError::py_err("you try to push coinbase as unconfirmed"));
         }
         chain
             .push_unconfirmed(&tx)
@@ -256,19 +252,19 @@ impl PyChain {
             .collect::<Vec<Address>>();
         let mut unspent = Vec::with_capacity(size);
         // find unspent
-        let mut position = 0usize;
         for addr in addrs.iter() {
-            for (input, output) in chain
+            for (index, (input, output)) in chain
                 .get_unspent_iter_by(addr)
                 .map_err(|_err| ValueError::py_err(format!("failed get unspent iter: {}", _err)))?
+                .enumerate()
             {
-                position += 1;
-                if position < start_pos {
+                if index < start_pos {
                     continue;
-                } else if end_pos <= position {
-                    break;
-                } else {
+                } else if index < end_pos {
+                    // start_pos <= index < end_pos
                     unspent.push(PyUnspent { input, output });
+                } else {
+                    break;
                 }
             }
         }
@@ -276,8 +272,32 @@ impl PyChain {
         Ok(unspent)
     }
 
-    fn list_account_movement(&self) -> PyResult<Vec<PyMovement>> {
-        unimplemented!()
+    fn list_account_movement(&self, page: usize, size: usize) -> PyResult<Vec<PyMovement>> {
+        let chain = self.lock();
+        let start_pos = page * size;
+        let end_pos = (page + 1) * size;
+        let mut result = Vec::with_capacity(size);
+        // find movement
+        for (index, (height, position, movement)) in chain
+            .get_movement_iter()
+            .map_err(|_err| ValueError::py_err(format!("fai;ed get account movement: {}", _err)))?
+            .enumerate()
+        {
+            if index < start_pos {
+                continue;
+            } else if index < end_pos {
+                // start_pos <= index < end_pos
+                result.push(PyMovement {
+                    height,
+                    position,
+                    movement,
+                });
+            } else {
+                break;
+            }
+        }
+        // success
+        Ok(result)
     }
 
     #[getter]
@@ -288,9 +308,7 @@ impl PyChain {
     fn close(&mut self) -> PyResult<()> {
         let mut chain = self.lock();
         if chain.tables.is_closed {
-            Err(ValueError::py_err(
-                "already close and maybe database is broken",
-            ))
+            Err(ValueError::py_err("already close and maybe database is broken"))
         } else {
             chain.tables.close();
             Ok(())

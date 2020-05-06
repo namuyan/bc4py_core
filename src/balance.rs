@@ -43,10 +43,7 @@ impl PartialOrd for Balances {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // get (self - other) balance
         let mut balances = self.clone();
-        other
-            .0
-            .iter()
-            .for_each(|_balance| balances.sub_balance(_balance));
+        other.0.iter().for_each(|_balance| balances.sub_balance(_balance));
         balances.compaction();
         // check all plus or minus
         let mut all_lesser = true;
@@ -75,9 +72,7 @@ impl PartialOrd for Balances {
 impl Balances {
     /// remove zero balance
     pub fn compaction(&mut self) {
-        self.0
-            .drain_filter(|balance| balance.amount == 0)
-            .for_each(drop);
+        self.0.drain_filter(|balance| balance.amount == 0).for_each(drop);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -185,8 +180,7 @@ impl BalanceMovement {
     pub fn to_bytes(&self) -> Vec<u8> {
         // [txhash 32b][outgoing_len u32][incoming_len u32][fee_len u32]
         // ~[outgoing 12b].. [incoming 4+1+12b].. [fee 12b]..
-        let size =
-            32 + 12 + self.outgoing.0.len() * 12 + self.incoming.len() * 17 + self.fee.0.len() * 12;
+        let size = 32 + 12 + self.outgoing.0.len() * 12 + self.incoming.len() * 17 + self.fee.0.len() * 12;
         let mut vec = Vec::with_capacity(size);
         vec.extend_from_slice(&u256_to_bytes(&self.hash));
         vec.extend_from_slice(&u32_to_bytes(self.outgoing.0.len() as u32));
@@ -221,9 +215,11 @@ impl BalanceMovement {
 
     pub fn push_incoming(&mut self, account_id: u32, coin_id: u32, amount: u64, is_inner: bool) {
         let amount = amount as i64;
-        match self.incoming.iter_mut().find(|(_id, _inner, _b)| {
-            _id == &account_id && _inner == &is_inner && _b.coin_id == coin_id
-        }) {
+        match self
+            .incoming
+            .iter_mut()
+            .find(|(_id, _inner, _b)| _id == &account_id && _inner == &is_inner && _b.coin_id == coin_id)
+        {
             Some((_id, _inner, balance)) => balance.amount += amount,
             None => self
                 .incoming

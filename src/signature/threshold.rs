@@ -5,12 +5,7 @@ use sha2::{Digest, Sha256};
 
 /// Y: shared public key
 #[allow(non_snake_case)]
-pub fn verify_threshold(
-    y: &POINT,
-    v: &POINT,
-    sigma: &SCALAR,
-    message: &[u8],
-) -> Result<bool, Error> {
+pub fn verify_threshold(y: &POINT, v: &POINT, sigma: &SCALAR, message: &[u8]) -> Result<bool, Error> {
     // hash by sha256
     let length = v.len() + y.len() + message.len();
     let mut vec = Vec::with_capacity(length);
@@ -42,12 +37,9 @@ mod threshold_verify {
     #[test]
     fn vector_0() {
         // https://github.com/namuyan/multi-party-schnorr/blob/master/static_params.py
-        let y = hex::decode("03b655c50b577764ab170225ae4578cdc3bb16ad35c62c4664fd783ffc4967fb82")
-            .unwrap();
-        let v = hex::decode("03361991856119c7bd009b709e9afd786eb18ac09ce14ad52471516faba7e08b9a")
-            .unwrap();
-        let sigma = hex::decode("4b76d08ccfc96e81c66691d8d1b98aa1cdd076256cc8a7e038edcd33468f17ab")
-            .unwrap();
+        let y = hex::decode("03b655c50b577764ab170225ae4578cdc3bb16ad35c62c4664fd783ffc4967fb82").unwrap();
+        let v = hex::decode("03361991856119c7bd009b709e9afd786eb18ac09ce14ad52471516faba7e08b9a").unwrap();
+        let sigma = hex::decode("4b76d08ccfc96e81c66691d8d1b98aa1cdd076256cc8a7e038edcd33468f17ab").unwrap();
         let msg = [79u8, 77, 69, 82].to_vec();
 
         let signature = Signature::new_threshold_sig(&y, &v, &sigma).unwrap();
