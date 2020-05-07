@@ -141,10 +141,9 @@ impl Block {
 
     pub fn calc_score(&self) -> f64 {
         // difficulty = BASE / target
-        // score = difficulty / bias
         let target = bits_to_target(self.header.bits).unwrap();
-        let max = U256::from(MAX_TARGET.as_ref());
-        let difficulty = ((max / target).as_u64() as f64) / 4294967296f64;
+        let difficulty = target_to_diff(target);
+        // score = difficulty / bias
         difficulty / (self.bias as f64)
     }
 }
@@ -171,6 +170,12 @@ pub fn target_to_bits(target: &U256) -> u32 {
         exponent += 1;
     }
     (exponent << 24) | (target.0[0] as u32)
+}
+
+/// calculate difficulty from target
+pub fn target_to_diff(target: U256) -> f64 {
+    let max = U256::from(MAX_TARGET.as_ref());
+    ((max / target).as_u64() as f64) / 4294967296f64
 }
 
 #[allow(unused_imports)]

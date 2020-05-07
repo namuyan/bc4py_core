@@ -130,6 +130,14 @@ impl TxMessage {
             // TxMessage:HashLocked(_) => 4,
         }
     }
+    pub fn to_type(&self) -> &'static str {
+        // for debug
+        match self {
+            TxMessage::Nothing => "None",
+            TxMessage::Plain(_) => "Plain",
+            TxMessage::Byte(_) => "Byte",
+        }
+    }
     pub fn to_bytes(&'a self) -> &'a [u8] {
         match self {
             TxMessage::Nothing => &[],
@@ -137,6 +145,14 @@ impl TxMessage {
             TxMessage::Byte(b) => b.as_slice(),
             // TxMessage::MsgPack(_) => ?,
             // TxMessage:HashLocked(_) => ?,
+        }
+    }
+    pub fn to_string(&self) -> String {
+        // for debug
+        match self {
+            TxMessage::Nothing => "".to_owned(),
+            TxMessage::Plain(p) => p.clone(),
+            TxMessage::Byte(b) => hex::encode(b), // hex
         }
     }
     pub fn length(&self) -> usize {
@@ -366,23 +382,13 @@ impl Tx {
 #[allow(unused_imports)]
 #[cfg(test)]
 mod tx {
+    use crate::python::utils::string2addr;
     use crate::signature::Signature;
     use crate::tx::*;
     use crate::utils::*;
     use bech32::{convert_bits, Bech32};
     use bigint::U256;
     use std::str::FromStr;
-
-    /// return (hrp, version, identifier)
-    fn addr2params(addr: &str) -> Result<(String, u8, Vec<u8>), bech32::Error> {
-        let bech = Bech32::from_str(addr)?;
-        let ver = match bech.data().get(0) {
-            Some(ver) => ver.to_owned().to_u8(),
-            None => return Err(bech32::Error::InvalidLength),
-        };
-        let identifier = convert_bits(&bech.data()[1..], 5, 8, false)?;
-        Ok((bech.hrp().to_string(), ver, identifier))
-    }
 
     #[test]
     fn body_encode_decode() {
@@ -394,10 +400,7 @@ mod tx {
             0,
         )];
 
-        let (_hrp, ver, data) = addr2params("test1qtwh6gp46daflg4e6f4dg79mptesawx4j4gy0dl").unwrap();
-        let mut address = [0u8; 21];
-        address[0] = ver;
-        write_slice(&mut address[1..21], data.as_slice());
+        let address = string2addr("test1qtwh6gp46daflg4e6f4dg79mptesawx4j4gy0dl").unwrap();
         let outputs = vec![TxOutput(address, 0, 13220952118)];
         let message = TxMessage::Nothing;
 

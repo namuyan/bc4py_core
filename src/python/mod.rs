@@ -5,6 +5,7 @@ pub mod pychain;
 pub mod pysigature;
 pub mod pytx;
 pub mod pyunspent;
+pub mod utils;
 use pyo3::prelude::*;
 
 /// This module is a python module implemented in Rust.

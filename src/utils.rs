@@ -33,6 +33,11 @@ pub fn u256_to_bytes(i: &U256) -> [u8; 32] {
 }
 
 #[inline]
+pub fn u256_to_hex(i: &U256) -> String {
+    hex::encode(u256_to_bytes(i).as_ref())
+}
+
+#[inline]
 pub fn write_slice(dst: &mut [u8], src: &[u8]) {
     assert_eq!(dst.len(), src.len());
     for (a, b) in dst.iter_mut().zip(src.iter()) {

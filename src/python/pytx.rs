@@ -1,12 +1,14 @@
 use crate::python::pychain::PyChain;
 use crate::python::pysigature::PySignature;
 use crate::python::pyunspent::PyUnspent;
+use crate::python::utils::params2bech;
+use crate::signature::signature_to_bytes;
 use crate::tx::*;
-use crate::utils::{u256_to_bytes, write_slice};
+use crate::utils::*;
 use bigint::U256;
 use pyo3::exceptions::ValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 use pyo3::PyIterProtocol;
 
 #[pyclass]
@@ -334,15 +336,15 @@ impl PyTx {
         })
     }
 
+    fn hash(&self, py: Python) -> PyObject {
+        let tx = self.clone_to_tx();
+        let hash = sha256double(&tx.to_bytes());
+        PyBytes::new(py, hash.as_ref()).to_object(py)
+    }
+
     #[getter]
     fn get_txtype(&self) -> u32 {
         self.txtype.to_int()
-    }
-
-    #[setter]
-    fn set_txtype(&mut self, value: u32) -> PyResult<()> {
-        self.txtype = TxType::from_int(value).map_err(|err| ValueError::py_err(err))?;
-        Ok(())
     }
 
     #[getter]
@@ -417,7 +419,6 @@ impl PyTx {
         Ok(())
     }
 
-    #[getter]
     fn get_input_cache(&self, py: Python) -> Option<PyObject> {
         match self.inputs_cache.as_ref() {
             Some(inputs) => {
@@ -434,6 +435,72 @@ impl PyTx {
             },
             None => None,
         }
+    }
+
+    pub fn getinfo(&self, py: Python) -> PyResult<PyObject> {
+        let dict = PyDict::new(py);
+        let tx = self.clone_to_tx();
+
+        dict.set_item("hash", u256_to_hex(&tx.hash()))?;
+        // dict.set_item("pos_amount", )?; REMOVED
+        // dict.set_item("height", )?; REMOVED
+        dict.set_item("version", self.version)?;
+        dict.set_item("type", format!("{:?}", self.txtype))?;
+        dict.set_item("time", self.time)?;
+        dict.set_item("deadline", self.deadline)?;
+        {
+            let inputs = tx
+                .inputs
+                .iter()
+                .map(|input| (u256_to_hex(&input.0), input.1))
+                .collect::<Vec<(String, u8)>>();
+            dict.set_item("inputs", inputs)?;
+        }
+        {
+            let outputs = tx
+                .outputs
+                .iter()
+                .map(|output| {
+                    let bech = params2bech(output.0[0], &output.0[1..21]).unwrap();
+                    let coin_id = output.1.to_object(py);
+                    let amount = output.2.to_object(py);
+                    (bech.to_string().to_object(py), coin_id, amount).to_object(py)
+                })
+                .collect::<Vec<PyObject>>();
+            dict.set_item("outputs", outputs)?;
+        }
+        dict.set_item("gas_price", self.gas_price)?;
+        dict.set_item("gas_amount", self.gas_amount)?;
+        dict.set_item("message_type", self.message.to_type())?;
+        dict.set_item("message", self.message.to_string())?;
+        {
+            let mut vec = vec![];
+            let signature = match tx.signature.as_ref() {
+                Some(signature) => Some(
+                    signature
+                        .iter()
+                        .map(|sign| {
+                            vec.clear();
+                            signature_to_bytes(sign, &mut vec);
+                            hex::encode(&vec)
+                        })
+                        .collect::<Vec<String>>(),
+                ),
+                None => None,
+            };
+            dict.set_item("signature", signature)?;
+        }
+        // dict.set_item("hash_locked", )?; REMOVED
+        // dict.set_item("recode_flag", )?; REMOVED
+        // dict.set_item("create_time", )?; REMOVED
+        let body_size = tx.get_size();
+        dict.set_item("size", body_size)?;
+        dict.set_item("total_size", match tx.get_signature_size() {
+            Ok(sign_size) => sign_size + body_size,
+            Err(_) => body_size,
+        })?;
+        dict.set_item("hex", hex::encode(tx.to_bytes()))?;
+        Ok(dict.to_object(py))
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::python::utils::*;
 use crate::utils::write_slice;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::ValueError;
@@ -57,13 +58,27 @@ impl PyAddress {
 
     #[classmethod]
     fn from_string(_cls: &PyType, string: &PyString) -> PyResult<Self> {
-        let addr = utils::string2addr(string.to_string()?.as_ref())
+        let addr = string2addr(string.to_string()?.as_ref())
             .map_err(|err| ValueError::py_err(format!("failed get address from string format: {}", err)))?;
         Ok(PyAddress { addr })
     }
 
-    fn to_string(&self, hrp: &PyString) -> PyResult<String> {
-        let bech = utils::params2bech(hrp.to_string()?.as_ref(), self.addr[0], &self.addr[1..21])
+    #[classmethod]
+    fn from_params(_cls: &PyType, ver: u8, identifier: &PyBytes) -> PyResult<Self> {
+        let identifier = identifier.as_bytes();
+        if identifier.len() != 20 {
+            Err(ValueError::py_err("identifier is 20 bytes"))
+        } else if 0b11111 < ver {
+            Err(ValueError::py_err("version is 0b00000 to 0b11111"))
+        } else {
+            let mut addr = [ver; 21];
+            write_slice(&mut addr[1..21], identifier);
+            Ok(PyAddress { addr })
+        }
+    }
+
+    fn to_string(&self) -> PyResult<String> {
+        let bech = params2bech(self.addr[0], &self.addr[1..21])
             .map_err(|err| ValueError::py_err(format!("failed get string format address: {}", err)))?;
         Ok(bech.to_string())
     }
@@ -99,42 +114,5 @@ impl std::fmt::Debug for PyAddress {
         f.debug_tuple("PyAddress")
             .field(&hex::encode(self.addr.as_ref()))
             .finish()
-    }
-}
-
-mod utils {
-    use crate::utils::write_slice;
-    use bech32::{convert_bits, Bech32, Error};
-    use std::str::FromStr;
-
-    type Address = [u8; 21];
-
-    pub fn string2addr(string: &str) -> Result<Address, Error> {
-        // return [ver+identifier] bytes
-        match addr2params(string) {
-            Ok((_, ver, identifier)) => {
-                let mut addr = [ver; 21];
-                write_slice(&mut addr[1..21], &identifier);
-                Ok(addr)
-            },
-            Err(err) => Err(err),
-        }
-    }
-
-    pub fn params2bech(hrp: &str, ver: u8, identifier: &[u8]) -> Result<Bech32, Error> {
-        let mut data = convert_bits(identifier, 8, 5, true)?;
-        data.insert(0, ver);
-        Bech32::new_check_data(hrp.to_string(), data)
-    }
-
-    fn addr2params(string: &str) -> Result<(String, u8, Vec<u8>), Error> {
-        // return (hrp, version, identifier)
-        let bech = Bech32::from_str(string)?;
-        let ver = match bech.data().get(0) {
-            Some(ver) => ver.to_owned().to_u8(),
-            None => return Err(Error::InvalidLength),
-        };
-        let identifier = convert_bits(&bech.data()[1..], 5, 8, false)?;
-        Ok((bech.hrp().to_string(), ver, identifier))
     }
 }

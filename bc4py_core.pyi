@@ -9,7 +9,9 @@ class PyAddress:
     def __init__(self, addr: bytes) -> None: ...
     @classmethod
     def from_string(cls, string: str) -> None: ...
-    def to_string(self, hrp: str) -> str: ...
+    @classmethod
+    def from_params(cls, ver: int, identifier: bytes) -> None: ...
+    def to_string(self) -> str: ...
     def identifier(self) -> bytes:
         """20 bytes"""
     def binary(self) -> bytes:
@@ -72,60 +74,74 @@ class PyTx:
             message_type: int,
             message: Optional[bytes],
     ) -> None: ...
+    def hash(self) -> bytes: ...
     def get_message_type(self) -> int: ...
     def get_message_body(self) -> bytes: ...
     def replace_message(self, value: bytes) -> None: ...
     def fill_input_cache(self, chain: PyChain) -> None: ...
     def get_input_cache(self) -> Optional[PyTxOutputs]: ...
+    def getinfo(self) -> dict: ...
 
 
 """
 Block
 """
 
-class PyHeader:
-    version: int
-    previous_hash: bytes
-    merkleroot: bytes
-    time: int
-    bits: int
-    nonce: int
-
-    def __init__(
-            self,
-            version: int,
-            previous_hash: bytes,
-            merkleroot: bytes,
-            time: int,
-            bits: int,
-            nonce: int
-    ) -> None: ...
-    @classmethod
-    def from_binary(cls, binary: bytes) -> None: ...
-    def to_binary(self) -> bytes: ...
-    def hash(self) -> bytes: ...
-
 
 class PyBlock:
+    """default read only (except work_hash and tx_hash)"""
     # meta
     work_hash: Optional[bytes]
     height: int
     flag: int
     bias: int
     # header
-    header: PyHeader
+    version: int
+    previous_hash: bytes
+    merkleroot: bytes
+    time: int
+    bits: int
+    nonce: int
     # body
     txs_hash: List[bytes]
 
     def __init__(
             self,
+            # meta
+            chain: PyChain,
             height: int,
             flag: int,
             bias: float,
-            header: PyHeader,
-            txs_hash: Sequence[bytes]
+            # header
+            version: int,
+            previous_hash: bytes,
+            merkleroot: bytes,
+            time: int,
+            bits: int,
+            nonce: int,
+            # body
+            txs_hash: Sequence[bytes],
     ) -> None: ...
+    @classmethod
+    def from_binary(
+            cls,
+            chain: PyChain,
+            height: int,
+            flag: int,
+            bias: float,
+            binary: bytes,
+            txs_hash: Sequence[bytes],
+    ) -> None: ...
+    def hash(self) -> bytes: ...
+    def two_difficulties(self) -> Tuple[float, float]:
+        """:returns: (required, work)"""
     def update_merkleroot(self) -> None: ...
+    def check_proof_of_work(self) -> bool: ...
+    def is_orphan(self) -> bool: ...
+    def update_time(self, time: int) -> None: ...
+    def update_nonce(self, nonce: int) -> None: ...
+    def increment_nonce(self) -> None: ...
+    def getinfo(self, tx_info: Optional[bool]) -> dict: ...
 
 
 """
@@ -202,6 +218,7 @@ class PyChain:
     def get_block(self, hash: bytes) -> Optional[PyBlock]: ...
     def get_tx(self, hash: bytes) -> Optional[PyTx]: ...
     def get_account_balance(self, account_id: int, confirm: int) -> PyAccount: ...
+    def get_account_addr_path(self, addr: PyAddress) -> Tuple[int, bool, int]: ...
     def calc_unspent_by_amount(self, balances: PyBalance) -> Sequence[PyUnspent]: ...
     def list_unspent_by_addr(self, addrs: Sequence[PyAddress], page: int, size: int) -> Sequence[PyUnspent]: ...
     def list_account_movement(self, page: int, size: int) -> Sequence[PyMovement]: ...

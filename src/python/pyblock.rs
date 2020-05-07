@@ -1,153 +1,31 @@
 use crate::block::*;
-use crate::utils::{sha256double, u256_to_bytes};
+use crate::python::pychain::{PyChain, SharedChain};
+use crate::python::pytx::PyTx;
+use crate::utils::*;
 use bigint::U256;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::ValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList, PyType};
+use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use pyo3::PyObjectProtocol;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
-
-#[pyclass]
-pub struct PyHeader {
-    pub header: BlockHeader,
-}
-
-#[pyproto]
-impl PyObjectProtocol for PyHeader {
-    fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("{:?}", self))
-    }
-
-    fn __hash__(&self) -> PyResult<isize> {
-        let mut hasher = DefaultHasher::new();
-        let header = &self.header;
-        hasher.write_u32(header.version);
-        header.previous_hash.0.iter().for_each(|i| hasher.write_u64(*i));
-        header.merkleroot.0.iter().for_each(|i| hasher.write_u64(*i));
-        hasher.write_u32(header.time);
-        hasher.write_u32(header.bits);
-        hasher.write_u32(header.nonce);
-        let hash = hasher.finish();
-        // note: convert 8bytes u64 to 8bytes or 4bytes isize
-        let hash = (hash % usize::MAX as u64) as i64 - (usize::MAX / 2) as i64;
-        Ok(hash as isize)
-    }
-
-    fn __richcmp__(&self, other: PyRef<'p, Self>, op: CompareOp) -> PyResult<bool> {
-        // only check version + identifier
-        let myself = self.__hash__()?;
-        let other = other.__hash__()?;
-        match op {
-            CompareOp::Eq => Ok(myself == other), // `__eq__`
-            CompareOp::Ne => Ok(myself != other), // `__ne__`
-            _ => Err(ValueError::py_err("not implemented")),
-        }
-    }
-}
-
-#[pymethods]
-impl PyHeader {
-    #[new]
-    fn new(
-        version: u32,
-        previous_hash: &PyBytes,
-        merkleroot: &PyBytes,
-        time: u32,
-        bits: u32,
-        nonce: u32,
-    ) -> PyResult<Self> {
-        let previous_hash = previous_hash.as_bytes();
-        let merkleroot = merkleroot.as_bytes();
-        if previous_hash.len() != 32 || merkleroot.len() != 32 {
-            Err(ValueError::py_err(
-                "previous_hash or merkleroot's length isn't 32 bytes",
-            ))
-        } else {
-            Ok(PyHeader {
-                header: BlockHeader {
-                    version,
-                    previous_hash: U256::from(previous_hash),
-                    merkleroot: U256::from(merkleroot),
-                    time,
-                    bits,
-                    nonce,
-                },
-            })
-        }
-    }
-
-    #[classmethod]
-    fn from_binary(_cls: &PyType, binary: &PyBytes) -> PyResult<Self> {
-        let binary = binary.as_bytes();
-        if binary.len() != 80 {
-            Err(ValueError::py_err("block header size is 80 bytes"))
-        } else {
-            let header = BlockHeader::from_bytes(binary);
-            Ok(PyHeader { header })
-        }
-    }
-
-    fn to_binary(&self, py: Python) -> PyObject {
-        PyBytes::new(py, self.header.to_bytes().as_ref()).to_object(py)
-    }
-
-    fn hash(&self, py: Python) -> PyObject {
-        let hash = sha256double(self.header.to_bytes().as_ref());
-        PyBytes::new(py, hash.as_slice()).to_object(py)
-    }
-
-    #[getter]
-    fn get_version(&self) -> u32 {
-        self.header.version
-    }
-
-    #[getter]
-    fn get_previous_hash(&self, py: Python) -> PyObject {
-        let previous_hash = u256_to_bytes(&self.header.previous_hash);
-        PyBytes::new(py, previous_hash.as_ref()).to_object(py)
-    }
-
-    #[getter]
-    fn get_merkleroot(&self, py: Python) -> PyObject {
-        let merkleroot = u256_to_bytes(&self.header.merkleroot);
-        PyBytes::new(py, merkleroot.as_ref()).to_object(py)
-    }
-
-    #[getter]
-    fn get_time(&self) -> u32 {
-        self.header.time
-    }
-
-    #[getter]
-    fn get_bits(&self) -> u32 {
-        self.header.bits
-    }
-
-    #[getter]
-    fn get_nonce(&self) -> u32 {
-        self.header.nonce
-    }
-}
-
-impl std::fmt::Debug for PyHeader {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hash = sha256double(self.header.to_bytes().as_ref());
-        f.debug_tuple("PyHeader").field(&hex::encode(&hash)).finish()
-    }
-}
 
 #[pyclass]
 pub struct PyBlock {
+    chain: SharedChain,
+
+    // meta
     pub work_hash: Option<U256>,
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub height: u32,
     pub flag: BlockFlag,
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub bias: f32,
-    pub header: Py<PyHeader>, // header
-    pub txs_hash: Vec<U256>,  // body
+
+    // header (not static)
+    pub header: BlockHeader,
+
+    // body
+    pub txs_hash: Vec<U256>,
 }
 
 #[pyproto]
@@ -156,39 +34,49 @@ impl PyObjectProtocol for PyBlock {
         Ok(format!("{:?}", self))
     }
 
-    fn __hash__(&self) -> PyResult<isize> {
-        // return header's
-        let gil = Python::acquire_gil();
-        let cell: &PyCell<PyHeader> = self.header.as_ref(gil.python());
-        let header_rc: PyRef<PyHeader> = cell.borrow();
-        header_rc.__hash__()
-    }
-
     fn __richcmp__(&self, other: PyRef<'p, Self>, op: CompareOp) -> PyResult<bool> {
-        // check header's
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-        let cell: &PyCell<PyHeader> = self.header.as_ref(py);
-        let header_rc: PyRef<PyHeader> = cell.borrow();
-        let cell: &PyCell<PyHeader> = other.header.as_ref(py);
-        let other_rc: PyRef<PyHeader> = cell.borrow();
-        header_rc.__richcmp__(other_rc, op)
+        match op {
+            CompareOp::Eq => Ok(self.header == other.header), // `__eq__`
+            CompareOp::Ne => Ok(self.header != other.header), // `__ne__`
+            _ => Err(ValueError::py_err("not implemented")),
+        }
     }
 }
 
 #[pymethods]
 impl PyBlock {
     #[new]
-    fn new(height: u32, flag: u8, bias: f32, header: PyRef<PyHeader>, txs_hash: &PyAny) -> PyResult<Self> {
+    fn new(
+        chain: PyRef<PyChain>,
+        height: u32,
+        flag: u8,
+        bias: f32,
+        version: u32,
+        previous_hash: &PyBytes,
+        merkleroot: &PyBytes,
+        time: u32,
+        bits: u32,
+        nonce: u32,
+        txs_hash: &PyAny,
+    ) -> PyResult<Self> {
         let flag = BlockFlag::from_int(flag).map_err(|err| ValueError::py_err(err))?;
-        let header = header.into();
+        let previous_hash = previous_hash.as_bytes();
+        let merkleroot = merkleroot.as_bytes();
         let txs_hash: Vec<Vec<u8>> = txs_hash.extract()?;
-        let txs_check = txs_hash.iter().all(|hash| hash.len() == 32);
-        if !txs_check {
-            Err(ValueError::py_err("some txs' hash are not 32 bytes"))
-        } else {
+        let txs_check = txs_hash.iter().all(|_hash| _hash.len() == 32);
+        // check
+        if previous_hash.len() == 32 && merkleroot.len() == 32 && txs_check {
+            let header = BlockHeader {
+                version,
+                previous_hash: U256::from(previous_hash),
+                merkleroot: U256::from(merkleroot),
+                time,
+                bits,
+                nonce,
+            };
             Ok(PyBlock {
-                work_hash: None, // insert after
+                chain: chain.clone_chain(),
+                work_hash: None,
                 height,
                 flag,
                 bias,
@@ -198,13 +86,61 @@ impl PyBlock {
                     .map(|hash| U256::from(hash.as_slice()))
                     .collect(),
             })
+        } else {
+            Err(ValueError::py_err(
+                "previous_hash, merkleroot and txs_hash is 32bytes hash",
+            ))
+        }
+    }
+
+    fn hash(&self, py: Python) -> PyObject {
+        let hash = sha256double(&self.header.to_bytes());
+        PyBytes::new(py, hash.as_ref()).to_object(py)
+    }
+
+    #[classmethod]
+    fn from_binary(
+        _cls: &PyType,
+        chain: PyRef<PyChain>,
+        height: u32,
+        flag: u8,
+        bias: f32,
+        binary: &PyBytes,
+        txs_hash: &PyAny,
+    ) -> PyResult<Self> {
+        let flag = BlockFlag::from_int(flag).map_err(|err| ValueError::py_err(err))?;
+        let binary = binary.as_bytes();
+        let txs_hash: Vec<Vec<u8>> = txs_hash.extract()?;
+        let txs_check = txs_hash.iter().all(|_hash| _hash.len() == 32);
+        // check
+        if binary.len() == 80 && txs_check {
+            let header = BlockHeader::from_bytes(binary);
+            Ok(PyBlock {
+                chain: chain.clone_chain(),
+                work_hash: None,
+                height,
+                flag,
+                bias,
+                header,
+                txs_hash: txs_hash
+                    .into_iter()
+                    .map(|hash| U256::from(hash.as_slice()))
+                    .collect(),
+            })
+        } else {
+            Err(ValueError::py_err(
+                "binary is 80 bytes & txs_hash is 32bytes hash list",
+            ))
         }
     }
 
     #[getter]
     fn get_work_hash(&self, py: Python) -> Option<PyObject> {
         match self.work_hash.as_ref() {
-            Some(hash) => Some(PyBytes::new(py, &u256_to_bytes(&hash)).to_object(py)),
+            Some(hash) => {
+                let hash = u256_to_bytes(&hash);
+                Some(PyBytes::new(py, hash.as_ref()).to_object(py))
+            },
             None => None,
         }
     }
@@ -225,11 +161,40 @@ impl PyBlock {
         self.flag.to_int()
     }
 
+    // about block header
     #[getter]
-    fn get_header(&self, py: Python) -> PyObject {
-        self.header.to_object(py)
+    fn get_version(&self) -> u32 {
+        self.header.version
     }
 
+    #[getter]
+    fn get_previous_hash(&self, py: Python) -> PyObject {
+        let hash = u256_to_bytes(&self.header.previous_hash);
+        PyBytes::new(py, hash.as_ref()).to_object(py)
+    }
+
+    #[getter]
+    fn get_merkleroot(&self, py: Python) -> PyObject {
+        let hash = u256_to_bytes(&self.header.merkleroot);
+        PyBytes::new(py, hash.as_ref()).to_object(py)
+    }
+
+    #[getter]
+    fn get_time(&self) -> u32 {
+        self.header.time
+    }
+
+    #[getter]
+    fn get_bits(&self) -> u32 {
+        self.header.bits
+    }
+
+    #[getter]
+    fn get_nonce(&self) -> u32 {
+        self.header.nonce
+    }
+
+    // about block body
     #[getter]
     fn get_txs_hash(&self, py: Python) -> PyObject {
         // return List[bytes] for edit
@@ -256,7 +221,22 @@ impl PyBlock {
         Ok(())
     }
 
-    fn update_merkleroot(&self, py: Python) -> PyResult<()> {
+    fn two_difficulties(&self) -> PyResult<(f64, f64)> {
+        if self.work_hash.is_none() {
+            return Err(ValueError::py_err("cannot get diff because work_hash is none"));
+        }
+        let work_hash = self.work_hash.as_ref().unwrap();
+        match bits_to_target(self.header.bits) {
+            Ok(target) => {
+                let required = target_to_diff(target);
+                let work = target_to_diff(*work_hash);
+                Ok((required, work))
+            },
+            Err(_err) => Err(ValueError::py_err(format!("cannot get diff: {}", _err))),
+        }
+    }
+
+    fn update_merkleroot(&mut self) -> PyResult<()> {
         let hashs: _ = self
             .txs_hash
             .iter()
@@ -268,39 +248,129 @@ impl PyBlock {
             .map_err(|_err| ValueError::py_err(format!("calc merkleroot hash is failed: {}", _err)))?;
 
         // success
-        let cell: &PyCell<PyHeader> = self.header.as_ref(py);
-        let mut header_rc: PyRefMut<PyHeader> = cell.borrow_mut();
-        header_rc.header.merkleroot = U256::from(hash.as_slice());
+        self.header.merkleroot = U256::from(hash.as_slice());
         Ok(())
+    }
+
+    fn check_proof_of_work(&self) -> PyResult<bool> {
+        match bits_to_target(self.header.bits) {
+            Ok(target) => match self.work_hash.as_ref() {
+                Some(work) => Ok(work < &target),
+                None => Err(ValueError::py_err("cannot check work because work_hash is none")),
+            },
+            Err(_err) => Err(ValueError::py_err(format!("cannot check work: {}", _err))),
+        }
+    }
+
+    fn is_orphan(&self) -> bool {
+        // note: get chain lock
+        let chain = self.chain.lock().unwrap();
+        let hash = self.header.hash();
+
+        // from confirmed
+        if chain.best_chain.contains(&hash) {
+            return false;
+        }
+
+        // from tables
+        if chain.tables.read_block(&hash).unwrap().is_some() {
+            return false;
+        }
+
+        // not found in tables and confirmed
+        true
+    }
+
+    fn update_time(&mut self, time: u32) {
+        self.header.time = time;
+    }
+
+    fn update_nonce(&mut self, nonce: u32) {
+        self.header.nonce = nonce;
+    }
+
+    fn increment_nonce(&mut self) {
+        // cycle nonce
+        let (new_nonce, _flag) = self.header.nonce.overflowing_add(1);
+        self.header.nonce = new_nonce;
+    }
+
+    fn getinfo(&self, py: Python, tx_info: Option<bool>) -> PyResult<PyObject> {
+        // for debug method just looked by humans
+        let dict = PyDict::new(py);
+
+        let hash = self.header.hash();
+        dict.set_item("hash", u256_to_hex(&hash))?;
+        if self.work_hash.is_some() {
+            dict.set_item("work_hash", u256_to_hex(self.work_hash.as_ref().unwrap()))?;
+        } else {
+            dict.set_item("work_hash", py.None())?;
+        }
+        dict.set_item("previous_hash", u256_to_hex(&self.header.previous_hash))?;
+        // dict.set_item("next_hash", )?; REMOVED
+        dict.set_item("is_orphan", self.is_orphan())?; // note: get chain lock
+                                                       // dict.set_item("recode_flag", )?; REMOVED
+        dict.set_item("height", self.height)?;
+        let (difficulty, _work) = self.two_difficulties()?;
+        dict.set_item("difficulty", difficulty)?;
+        dict.set_item("fixed_difficulty", difficulty / (self.bias as f64))?;
+        dict.set_item("score", difficulty / (self.bias as f64))?;
+        dict.set_item("flag", format!("{:?}", self.flag))?;
+        dict.set_item("merkleroot", u256_to_hex(&self.header.merkleroot))?;
+        dict.set_item("time", self.header.time)?;
+        dict.set_item("bits", self.header.bits)?;
+        dict.set_item("bias", self.header.bits)?;
+        dict.set_item("nonce", self.header.nonce)?;
+        if tx_info.is_some() && tx_info.unwrap() {
+            // with tx info list
+            let chain = self.chain.lock().unwrap();
+            match chain.tables.read_full_block(&hash).unwrap() {
+                Some((_block, txs)) => {
+                    let mut tx_info = Vec::with_capacity(txs.len());
+                    for tx in txs.into_iter() {
+                        tx_info.push(PyTx::from_tx(tx)?.getinfo(py)?);
+                    }
+                    dict.set_item("txs", tx_info)?;
+                },
+                None => dict.set_item("txs", py.None())?,
+            }
+        } else {
+            // with tx hash list
+            let txs = self
+                .txs_hash
+                .iter()
+                .map(|_hash| u256_to_hex(_hash))
+                .collect::<Vec<String>>();
+            dict.set_item("txs", txs)?;
+        }
+        // dict.set_item("create_time", )?;  REMOVED
+        // dict.set_item("size", )?;  REMOVED
+        dict.set_item("hex", hex::encode(self.header.to_bytes().as_ref()))?;
+        Ok(dict.to_object(py))
     }
 }
 
 impl std::fmt::Debug for PyBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let gil = Python::acquire_gil();
-        let cell: &PyCell<PyHeader> = self.header.as_ref(gil.python());
-        let header_rc: PyRef<PyHeader> = cell.borrow();
-        let hash = sha256double(header_rc.header.to_bytes().as_ref());
+        let hash = hex::encode(&sha256double(&self.header.to_bytes()));
         f.debug_tuple("PyBlock")
             .field(&self.height)
             .field(&self.flag)
-            .field(&hex::encode(&hash))
+            .field(&hash)
             .finish()
     }
 }
 
 impl PyBlock {
-    pub fn from_block(block: Block) -> PyResult<Self> {
+    pub fn from_block(chain: &SharedChain, block: Block) -> PyResult<Self> {
         // moved
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-        let header = PyCell::new(py, PyHeader { header: block.header })?;
         Ok(PyBlock {
             work_hash: Some(block.work_hash),
             height: block.height,
             flag: block.flag,
             bias: block.bias,
-            header: header.into(),
+            chain: chain.clone(),
+            header: block.header,
             txs_hash: block.txs_hash,
         })
     }
@@ -310,16 +380,12 @@ impl PyBlock {
         if self.work_hash.is_none() {
             return Err("cannot clone to block because work_hash is None".to_owned());
         }
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-        let cell: &PyCell<PyHeader> = self.header.as_ref(py);
-        let header_rc: PyRef<PyHeader> = cell.borrow();
         Ok(Block {
             work_hash: self.work_hash.unwrap(),
             height: self.height,
             flag: self.flag.clone(),
             bias: self.bias,
-            header: header_rc.header.clone(),
+            header: self.header.clone(),
             txs_hash: self.txs_hash.clone(),
         })
     }

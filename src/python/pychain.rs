@@ -13,10 +13,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 type Address = [u8; 21];
+pub type SharedChain = Arc<Mutex<Chain>>;
 
 #[pyclass]
 pub struct PyChain {
-    chain: Arc<Mutex<Chain>>,
+    chain: SharedChain,
 }
 
 #[pymethods]
@@ -85,7 +86,7 @@ impl PyChain {
             .get_block(&U256::from(hash))
             .map_err(|_err| ValueError::py_err(_err))?
         {
-            Some(block) => Ok(Some(PyBlock::from_block(block)?)),
+            Some(block) => Ok(Some(PyBlock::from_block(&self.chain, block)?)),
             None => Ok(None),
         }
     }
@@ -127,6 +128,11 @@ impl PyChain {
                 unconfirmed: unconfirmed.into(),
             })
         }
+    }
+
+    fn get_account_addr_path(&self, addr: PyRef<PyAddress>) -> Option<(u32, bool, u32)> {
+        // find address derive path `m/44'/CoinType'/account'/is_inner/index`
+        self.lock().account.get_path_from_addr(&addr.addr)
     }
 
     fn calc_unspent_by_amount(&self, balances: PyRef<PyBalance>) -> PyResult<Vec<PyUnspent>> {
@@ -322,5 +328,9 @@ impl PyChain {
         self.chain
             .lock()
             .expect("chain lock failed by already locked with same thread maybe")
+    }
+
+    pub fn clone_chain(&self) -> SharedChain {
+        self.chain.clone()
     }
 }
