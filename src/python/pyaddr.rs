@@ -3,7 +3,7 @@ use crate::utils::write_slice;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::ValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString, PyType};
+use pyo3::types::{PyBytes, PyType};
 use pyo3::PyObjectProtocol;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
@@ -57,8 +57,8 @@ impl PyAddress {
     }
 
     #[classmethod]
-    fn from_string(_cls: &PyType, string: &PyString) -> PyResult<Self> {
-        let addr = string2addr(string.to_string()?.as_ref())
+    fn from_string(_cls: &PyType, string: &str) -> PyResult<Self> {
+        let addr = string2addr(string)
             .map_err(|err| ValueError::py_err(format!("failed get address from string format: {}", err)))?;
         Ok(PyAddress { addr })
     }
@@ -83,19 +83,8 @@ impl PyAddress {
         Ok(bech.to_string())
     }
 
-    #[getter(version)]
-    fn get_version(&self) -> u8 {
+    fn version(&self) -> u8 {
         self.addr[0]
-    }
-
-    #[setter(version)]
-    fn set_version(&mut self, value: u8) -> PyResult<()> {
-        if 0b11111 < value {
-            Err(ValueError::py_err("addr version is 0b00000 to 0b11111"))
-        } else {
-            self.addr[0] = value;
-            Ok(())
-        }
     }
 
     fn identifier(&self, py: Python) -> PyObject {
@@ -111,8 +100,6 @@ impl PyAddress {
 
 impl std::fmt::Debug for PyAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("PyAddress")
-            .field(&hex::encode(self.addr.as_ref()))
-            .finish()
+        f.write_str(&self.to_string().unwrap())
     }
 }

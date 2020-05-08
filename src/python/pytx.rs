@@ -1,3 +1,4 @@
+use crate::python::pyaddr::PyAddress;
 use crate::python::pychain::PyChain;
 use crate::python::pysigature::PySignature;
 use crate::python::pyunspent::PyUnspent;
@@ -155,15 +156,10 @@ pub struct PyTxOutputs {
 impl PyTxOutputs {
     #[new]
     fn new(outputs: &PyAny) -> PyResult<Self> {
-        let outputs: Vec<(Vec<u8>, u32, u64)> = outputs.extract()?;
+        let outputs: Vec<(PyRef<PyAddress>, u32, u64)> = outputs.extract()?;
         let outputs = outputs
             .iter()
-            .map(|(_addr, coin_id, amount)| {
-                assert_eq!(_addr.len(), 21, "output address is 21bytes");
-                let mut addr = [0u8; 21];
-                write_slice(&mut addr, _addr);
-                TxOutput(addr, *coin_id, *amount)
-            })
+            .map(|(addr, coin_id, amount)| TxOutput(addr.addr, *coin_id, *amount))
             .collect();
         Ok(PyTxOutputs {
             iter_index: None,
@@ -178,10 +174,14 @@ impl PyTxOutputs {
     fn get(&self, py: Python, index: u8) -> PyResult<Option<PyObject>> {
         match self.outputs.get(index as usize) {
             Some(output) => {
-                let addr = PyBytes::new(py, output.0.as_ref()).to_object(py);
+                let addr: _ = PyCell::new(py, PyAddress {
+                    addr: output.0.clone(),
+                })?;
                 let coin_id = output.1.to_object(py);
                 let amount = output.2.to_object(py);
-                Ok(Some(PyTuple::new(py, &[addr, coin_id, amount]).to_object(py)))
+                Ok(Some(
+                    PyTuple::new(py, &[addr.into(), coin_id, amount]).to_object(py),
+                ))
             },
             None => Ok(None),
         }
@@ -217,10 +217,12 @@ impl PyTxOutputs {
                 None => return Err(ValueError::py_err("outputs is empty but try to pop()")),
             }
         };
-        let addr = PyBytes::new(py, removed.0.as_ref()).to_object(py);
+        let addr: _ = PyCell::new(py, PyAddress {
+            addr: removed.0.clone(),
+        })?;
         let coin_id = removed.1.to_object(py);
         let amount = removed.2.to_object(py);
-        Ok(PyTuple::new(py, &[addr, coin_id, amount]).to_object(py))
+        Ok(PyTuple::new(py, &[addr.into(), coin_id, amount]).to_object(py))
     }
 
     fn extend(&mut self, value: &PyCell<PyTxOutputs>) -> PyResult<()> {
@@ -259,10 +261,14 @@ impl PyIterProtocol for PyTxOutputs {
         *slf.iter_index.as_mut().unwrap() += 1; // pre increment
         match slf.outputs.get(index) {
             Some(output) => {
-                let addr = PyBytes::new(py, output.0.as_ref()).to_object(py);
+                let addr: _ = PyCell::new(py, PyAddress {
+                    addr: output.0.clone(),
+                })?;
                 let coin_id = output.1.to_object(py);
                 let amount = output.2.to_object(py);
-                Ok(Some(PyTuple::new(py, &[addr, coin_id, amount]).to_object(py)))
+                Ok(Some(
+                    PyTuple::new(py, &[addr.into(), coin_id, amount]).to_object(py),
+                ))
             },
             None => {
                 // clear iterator status
@@ -506,10 +512,8 @@ impl PyTx {
 
 // use on inner (not for Pyo3)
 impl PyTx {
-    pub fn from_tx(tx: Tx) -> PyResult<PyTx> {
+    pub fn from_tx(py: Python, tx: Tx) -> PyResult<PyTx> {
         // convert from Tx to PyTx (moved)
-        let gil = Python::acquire_gil();
-        let py = gil.python();
         let inputs: _ = PyCell::new(py, PyTxInputs {
             iter_index: None,
             inputs: tx.inputs,

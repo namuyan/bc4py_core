@@ -5,7 +5,6 @@ Address
 """
 
 class PyAddress:
-    version: int
     def __init__(self, addr: bytes) -> None: ...
     @classmethod
     def from_string(cls, string: str) -> None: ...
@@ -24,7 +23,7 @@ Tx
 
 
 TxInput = Tuple[bytes, int]
-TxOutput = Tuple[bytes, int, int]
+TxOutput = Tuple[PyAddress, int, int]
 
 
 class PyTxInputs:

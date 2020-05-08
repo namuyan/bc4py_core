@@ -91,7 +91,7 @@ impl PyChain {
         }
     }
 
-    fn get_tx(&self, hash: &PyBytes) -> PyResult<Option<PyTx>> {
+    fn get_tx(&self, py: Python, hash: &PyBytes) -> PyResult<Option<PyTx>> {
         let chain = self.lock();
         let hash = hash.as_bytes();
         if hash.len() != 32 {
@@ -101,7 +101,7 @@ impl PyChain {
             .get_tx(&U256::from(hash))
             .map_err(|_err| ValueError::py_err(_err))?
         {
-            Some(tx) => Ok(Some(PyTx::from_tx(tx)?)),
+            Some(tx) => Ok(Some(PyTx::from_tx(py, tx)?)),
             None => Ok(None),
         }
     }
