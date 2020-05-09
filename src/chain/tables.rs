@@ -131,7 +131,7 @@ pub struct Tables {
     mint: DB,
 
     // tx cache
-    mempool: DB,
+    txcache: DB,
 
     // account
     account: DB,
@@ -177,7 +177,7 @@ impl Tables {
         let mint = DB::open(&rocks_opts, dir.join("mint")).unwrap();
         let account = DB::open(&rocks_opts, dir.join("account")).unwrap();
         let movement = DB::open(&rocks_opts, dir.join("movement")).unwrap();
-        let mempool = DB::open(&rocks_opts, dir.join("mempool")).unwrap();
+        let txcache = DB::open(&rocks_opts, dir.join("txcache")).unwrap();
 
         Ok(Tables {
             dir: dir.to_path_buf(),
@@ -192,7 +192,7 @@ impl Tables {
             mint,
             account,
             movement,
-            mempool,
+            txcache,
         })
     }
 
@@ -224,7 +224,7 @@ impl Tables {
             mint: WriteBatch::default(),
             account: WriteBatch::default(),
             movement: WriteBatch::default(),
-            mempool: WriteBatch::default(),
+            txcache: WriteBatch::default(),
         }
     }
 
@@ -390,22 +390,22 @@ impl Tables {
         }
     }
 
-    pub fn read_mempool(&self, hash: &U256) -> Result<Option<TxVerifiable>, String> {
-        // [txhash 32b] -> [mempool bytes Xb]
+    pub fn read_txcache(&self, hash: &U256) -> Result<Option<TxVerifiable>, String> {
+        // [txhash 32b] -> [txcache bytes Xb]
         // note: don't include coinbase tx
         let key = u256_to_bytes(hash);
-        match self.mempool.get(key.as_ref()) {
+        match self.txcache.get(key.as_ref()) {
             Ok(value) => match value {
-                Some(value) => Ok(Some(unpickle_mempool(&value))),
+                Some(value) => Ok(Some(unpickle_txcache(&value))),
                 None => Ok(None),
             },
             Err(err) => Err(format!("database exception: {}", err.to_string())),
         }
     }
 
-    pub fn read_mempool_iter(&self) -> DBIterator {
-        // [txhash 32b] -> [mempool bytes Xb]
-        self.mempool.iterator(IteratorMode::Start)
+    pub fn read_txcache_iter(&self) -> DBIterator {
+        // [txhash 32b] -> [txcache bytes Xb]
+        self.txcache.iterator(IteratorMode::Start)
     }
 }
 
@@ -421,7 +421,7 @@ pub struct TableCursor<'a> {
     mint: WriteBatch,
     account: WriteBatch,
     movement: WriteBatch,
-    mempool: WriteBatch,
+    txcache: WriteBatch,
 }
 
 impl TableCursor<'_> {
@@ -440,7 +440,7 @@ impl TableCursor<'_> {
         self.tables.mint.write_opt(self.mint, &writeopts)?;
         self.tables.account.write_opt(self.account, &writeopts)?;
         self.tables.movement.write_opt(self.movement, &writeopts)?;
-        self.tables.mempool.write_opt(self.mempool, &writeopts)?;
+        self.tables.txcache.write_opt(self.txcache, &writeopts)?;
 
         // return transaction duration
         Ok(self.transaction_time.elapsed().as_secs_f32())
@@ -619,21 +619,21 @@ impl TableCursor<'_> {
         }
     }
 
-    pub fn write_mempool(&mut self, tx: &TxVerifiable) -> Result<(), String> {
-        // [txhash 32b] -> [mempool bytes Xb]
+    pub fn write_txcache(&mut self, tx: &TxVerifiable) -> Result<(), String> {
+        // [txhash 32b] -> [txcache bytes Xb]
         if tx.body.is_coinbase() {
-            return Err(format!("coinbase tx is not recode to mempool {:?}", tx));
+            return Err(format!("coinbase tx is not recode to txcache {:?}", tx));
         }
         // non-coinbase tx
         let key = tx.body.hash();
-        let value = pickle_mempool(tx);
-        self.mempool.put(&key, &value).map_err(|err| err.to_string())
+        let value = pickle_txcache(tx);
+        self.txcache.put(&key, &value).map_err(|err| err.to_string())
     }
 
-    pub fn remove_from_mempool(&mut self, hash: &U256) -> Result<(), String> {
-        // [txhash 32b] -> [mempool bytes Xb]
+    pub fn remove_from_txcache(&mut self, hash: &U256) -> Result<(), String> {
+        // [txhash 32b] -> [txcache bytes Xb]
         let key = u256_to_bytes(hash);
-        self.mempool.delete(key.as_ref()).map_err(|err| err.to_string())
+        self.txcache.delete(key.as_ref()).map_err(|err| err.to_string())
     }
 }
 

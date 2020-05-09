@@ -41,8 +41,8 @@ impl UnconfirmedBuilder {
         }
     }
 
-    pub fn restore_from_mempool(tables: &Tables, best_chain: &BlockHashVec) -> Result<Self, String> {
-        // unconfirmed = mempool - best_chain's txs
+    pub fn restore_from_txcache(tables: &Tables, best_chain: &BlockHashVec) -> Result<Self, String> {
+        // unconfirmed = txcache - best_chain's txs
         let mut include_txs = vec![];
         for blockhash in best_chain {
             let block = tables.read_block(blockhash)?.expect("not found block?");
@@ -50,12 +50,12 @@ impl UnconfirmedBuilder {
         }
 
         let mut unconfirmed = UnconfirmedBuilder::new();
-        for (hash, bytes) in tables.read_mempool_iter() {
+        for (hash, bytes) in tables.read_txcache_iter() {
             let hash = U256::from(hash.as_ref());
             if include_txs.contains(&hash) {
                 continue;
             }
-            let tx = unpickle_mempool(bytes.as_ref());
+            let tx = unpickle_txcache(bytes.as_ref());
             unconfirmed.push_new_tx(&tx)?;
         }
         Ok(unconfirmed)
@@ -78,8 +78,8 @@ impl UnconfirmedBuilder {
         for unconfirmed in self.unconfirmed.iter() {
             if unconfirmed.depend_hashs.contains(hash) {
                 let tx = tables
-                    .read_mempool(&unconfirmed.hash)?
-                    .expect("try to get unconfirmed from mempool?");
+                    .read_txcache(&unconfirmed.hash)?
+                    .expect("try to get unconfirmed from txcache?");
                 if tx.body.inputs.contains(input) {
                     return Ok(true);
                 }
@@ -222,7 +222,7 @@ impl UnconfirmedBuilder {
 
         // remove from tables
         for tx in deleted.iter() {
-            cur.remove_from_mempool(&tx.hash).unwrap();
+            cur.remove_from_txcache(&tx.hash).unwrap();
         }
 
         // return expired tx's hashs
@@ -243,19 +243,19 @@ impl UnconfirmedBuilder {
 
             // input already used & set output None
             if unconfirmed.depend_hashs.contains(&input.0) {
-                match tables.read_mempool(&unconfirmed.hash)? {
+                match tables.read_txcache(&unconfirmed.hash)? {
                     Some(tx) => {
                         if tx.body.inputs.contains(input) {
                             output.take(); // <= None
                         }
                     },
-                    None => return Err("input's hash isn't found in mempool".to_owned()),
+                    None => return Err("input's hash isn't found in txcache".to_owned()),
                 }
             }
 
             // find output of input
             if unconfirmed.hash == input.0 {
-                let tx = tables.read_mempool(&unconfirmed.hash)?.unwrap();
+                let tx = tables.read_txcache(&unconfirmed.hash)?.unwrap();
                 let inner = tx
                     .body
                     .outputs

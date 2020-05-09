@@ -225,7 +225,7 @@ impl ConfirmedBuilder {
 
             // find output of input
             if confirmed.hash == input.0 {
-                let tx = tables.read_mempool(&confirmed.hash)?.unwrap();
+                let tx = tables.read_txcache(&confirmed.hash)?.unwrap();
                 let inner = tx
                     .body
                     .outputs

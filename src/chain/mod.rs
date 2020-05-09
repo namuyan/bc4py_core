@@ -66,7 +66,7 @@ impl Chain {
         let unconfirmed = if tables.initialized {
             UnconfirmedBuilder::new()
         } else {
-            let mut unconfirmed: _ = UnconfirmedBuilder::restore_from_mempool(&tables, &best_chain)?;
+            let mut unconfirmed: _ = UnconfirmedBuilder::restore_from_txcache(&tables, &best_chain)?;
             let mut cur = tables.transaction();
             unconfirmed.remove_expired_txs(deadline, &mut cur);
             cur.commit().unwrap();
@@ -116,7 +116,7 @@ impl Chain {
             for txhash in fork.txs_hash.iter().skip(1).rev() {
                 let tx = cur
                     .tables
-                    .read_mempool(txhash)?
+                    .read_txcache(txhash)?
                     .expect("revert tx included by fork block");
                 self.unconfirmed.push_new_tx(&tx)?;
             }
@@ -148,13 +148,13 @@ impl Chain {
                     let mut indexed_txs: _ = Vec::with_capacity(block.txs_hash.len());
                     for txhash in block.txs_hash.iter() {
                         // block's tx is coinbase tx and non-coinbase txs
-                        let _tx = cur.tables.read_mempool(txhash)?;
+                        let _tx = cur.tables.read_txcache(txhash)?;
                         let tx = if txhash == &coinbase.hash {
                             &coinbase
                         } else if _tx.is_some() {
                             _tx.as_ref().unwrap()
                         } else {
-                            return Err("not found mempool & not coinbase tx".to_owned());
+                            return Err("not found txcache & not coinbase tx".to_owned());
                         };
 
                         // utxo
@@ -179,7 +179,7 @@ impl Chain {
                         // mint FIXME: unimplemented
 
                         // remove tx
-                        cur.remove_from_mempool(txhash)?;
+                        cur.remove_from_txcache(txhash)?;
 
                         // tx index
                         if cur.tables.table_opts.tx_index || is_account_tx {
@@ -216,7 +216,7 @@ impl Chain {
 
         // insert
         self.unconfirmed.push_new_tx(&tx)?;
-        cur.write_mempool(&tx)?;
+        cur.write_txcache(&tx)?;
 
         // check account transaction
         self.account
@@ -240,8 +240,8 @@ impl Chain {
             return Ok(Some(tx.unwrap()));
         }
 
-        // from mempool (confirmed or unconfirmed)
-        let tx = self.tables.read_mempool(hash)?;
+        // from txcache (confirmed or unconfirmed)
+        let tx = self.tables.read_txcache(hash)?;
         if tx.is_some() {
             return Ok(Some(tx.unwrap().convert_recoded_tx()));
         }

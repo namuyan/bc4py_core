@@ -207,7 +207,7 @@ impl TxRecoded {
 }
 
 /// **read-only**
-/// form tables (coinbase) and from mempool (normal)
+/// form tables (coinbase) and from txcache (normal)
 #[derive(Clone, PartialEq, Debug)]
 pub struct TxVerifiable {
     pub hash: U256,

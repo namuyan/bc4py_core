@@ -130,9 +130,9 @@ impl Iterator for UnspentIter<'_> {
                 let tx = self
                     .chain
                     .tables
-                    .read_mempool(&txhash)
+                    .read_txcache(&txhash)
                     .expect("table read exception?")
-                    .expect("not found tx on mempool?");
+                    .expect("not found tx on txcache?");
                 for (txindex, output) in tx.body.outputs.into_iter().enumerate() {
                     // find unspent
                     if output.0 == self.addr {

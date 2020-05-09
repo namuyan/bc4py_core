@@ -144,7 +144,7 @@ pub fn unpickle_block(bytes: &[u8]) -> Block {
     }
 }
 
-pub fn pickle_mempool(tx: &TxVerifiable) -> Vec<u8> {
+pub fn pickle_txcache(tx: &TxVerifiable) -> Vec<u8> {
     // [tx size u32][sig size u32][input size u32][tx_b Xb][tx_sig Xb][input cache 33b]..
     let inputs_cache = &tx.inputs_cache;
     let size = 12 + tx.body.get_size() + tx.get_signature_size() + inputs_cache.len() * 33;
@@ -160,7 +160,7 @@ pub fn pickle_mempool(tx: &TxVerifiable) -> Vec<u8> {
     vec
 }
 
-pub fn unpickle_mempool(bytes: &[u8]) -> TxVerifiable {
+pub fn unpickle_txcache(bytes: &[u8]) -> TxVerifiable {
     // [tx size u32][sig size u32][input size u32][tx_b Xb][tx_sig Xb][input cache 33b]..
     let tx_size = bytes_to_u32(&bytes[0..4]) as usize;
     let sig_size = bytes_to_u32(&bytes[4..4 + 4]) as usize;
@@ -279,7 +279,7 @@ mod test {
     }
 
     #[test]
-    fn mempool() {
+    fn txcache() {
         let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798").unwrap();
         let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6").unwrap(); // r
         let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05").unwrap(); // s
@@ -303,10 +303,10 @@ mod test {
         };
 
         // decode
-        let binary = pickle_mempool(&tx);
+        let binary = pickle_txcache(&tx);
 
         // encode
-        let new_tx = unpickle_mempool(&binary);
+        let new_tx = unpickle_txcache(&binary);
 
         assert_eq!(new_tx, tx);
     }
