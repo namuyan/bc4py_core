@@ -328,7 +328,7 @@ impl PyBlock {
                 Some((_block, txs)) => {
                     let mut tx_info = Vec::with_capacity(txs.len());
                     for tx in txs.into_iter() {
-                        tx_info.push(PyTx::from_tx(py, tx)?.getinfo(py)?);
+                        tx_info.push(PyTx::from_recoded(py, tx)?.getinfo(py)?);
                     }
                     dict.set_item("txs", tx_info)?;
                 },

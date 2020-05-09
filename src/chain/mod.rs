@@ -15,7 +15,7 @@ use crate::chain::{
     tables::*,
     unconfirmed::UnconfirmedBuilder,
 };
-use crate::tx::{Tx, TxInput, TxOutput};
+use crate::tx::{TxInput, TxOutput, TxRecoded, TxVerifiable};
 use bigint::U256;
 use std::path::Path;
 
@@ -94,7 +94,7 @@ impl Chain {
         })
     }
 
-    pub fn push_new_block(&mut self, block: Block, txs: &Vec<Tx>) -> Result<(), String> {
+    pub fn push_new_block(&mut self, block: Block, txs: &Vec<TxVerifiable>) -> Result<(), String> {
         // note: block check is already finished
         // note: data is broken! if return error..
 
@@ -145,12 +145,11 @@ impl Chain {
                     let blockhash = block.header.hash();
 
                     // tx
-                    let coinbase_hash = coinbase.hash();
                     let mut indexed_txs: _ = Vec::with_capacity(block.txs_hash.len());
                     for txhash in block.txs_hash.iter() {
                         // block's tx is coinbase tx and non-coinbase txs
                         let _tx = cur.tables.read_mempool(txhash)?;
-                        let tx = if txhash == &coinbase_hash {
+                        let tx = if txhash == &coinbase.hash {
                             &coinbase
                         } else if _tx.is_some() {
                             _tx.as_ref().unwrap()
@@ -159,19 +158,18 @@ impl Chain {
                         };
 
                         // utxo
-                        cur.write_utxo_index(tx)?;
+                        cur.write_utxo_index(&tx.body)?;
 
                         // addr index
                         let mut is_account_tx = false;
                         let full_index = cur.tables.table_opts.addr_index;
-                        let input_cache = tx.inputs_cache.as_ref().unwrap();
-                        for (input, output) in tx.inputs.iter().zip(input_cache) {
+                        for (input, output) in tx.body.inputs.iter().zip(tx.inputs_cache.iter()) {
                             if full_index || self.account.is_account_address(&output.0) {
                                 is_account_tx = true;
                                 cur.remove_addr_index(&output.0, input)?;
                             }
                         }
-                        for (index, output) in tx.outputs.iter().enumerate() {
+                        for (index, output) in tx.body.outputs.iter().enumerate() {
                             if full_index || self.account.is_account_address(&output.0) {
                                 is_account_tx = true;
                                 cur.write_addr_index(output, txhash, index as u8)?;
@@ -206,14 +204,13 @@ impl Chain {
         Ok(())
     }
 
-    pub fn push_unconfirmed(&mut self, tx: &Tx) -> Result<(), String> {
-        assert!(!tx.is_coinbase());
+    pub fn push_unconfirmed(&mut self, tx: &TxVerifiable) -> Result<(), String> {
+        assert!(!tx.body.is_coinbase());
         // start transaction
         let mut cur = self.tables.transaction();
 
         // check already is unconfirmed
-        let hash = tx.hash();
-        if self.unconfirmed.have_the_tx(&hash) {
+        if self.unconfirmed.have_the_tx(&tx.hash) {
             return Err(format!("tx is already unconfirmed {:?}", tx));
         }
 
@@ -236,7 +233,7 @@ impl Chain {
         Ok(self.tables.read_block(hash)?)
     }
 
-    pub fn get_tx(&self, hash: &U256) -> Result<Option<Tx>, String> {
+    pub fn get_tx(&self, hash: &U256) -> Result<Option<TxRecoded>, String> {
         // from tables (tx_indexed or account tx)
         let tx = self.tables.read_tx(hash)?;
         if tx.is_some() {
@@ -246,7 +243,7 @@ impl Chain {
         // from mempool (confirmed or unconfirmed)
         let tx = self.tables.read_mempool(hash)?;
         if tx.is_some() {
-            return Ok(Some(tx.unwrap()));
+            return Ok(Some(tx.unwrap().convert_recoded_tx()));
         }
 
         // not found

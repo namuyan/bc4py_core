@@ -3,7 +3,7 @@ use crate::block::Block;
 use crate::chain::Chain;
 use crate::python::pyunspent::PyUnspent;
 use crate::python::{pyaccount::*, pyaddr::PyAddress, pyblock::PyBlock, pytx::PyTx};
-use crate::tx::*;
+use crate::tx::{TxInput, TxOutput};
 use bigint::U256;
 use pyo3::exceptions::{TypeError, ValueError};
 use pyo3::prelude::*;
@@ -47,13 +47,19 @@ impl PyChain {
         }
     }
 
-    fn push_new_block(&self, block: PyRef<PyBlock>, txs: Vec<PyRef<PyTx>>) -> PyResult<()> {
+    fn push_new_block(&self, py: Python, block: PyRef<PyBlock>, txs: Vec<PyRef<PyTx>>) -> PyResult<()> {
         let mut chain = self.lock();
         if chain.tables.is_closed {
             return Err(ValueError::py_err("already closed!"));
         }
         let block: Block = block.clone_to_block().map_err(|_err| TypeError::py_err(_err))?;
-        let txs = txs.iter().map(|_tx| _tx.clone_to_tx()).collect::<Vec<Tx>>();
+        let txs = {
+            let mut _txs = Vec::with_capacity(block.txs_hash.len());
+            for tx in txs.iter() {
+                _txs.push(tx.clone_to_verifiable(py)?)
+            }
+            _txs
+        };
 
         // note: push txs to unconfirmed before
         // warning: error means tables is broken, do not allow this error
@@ -62,14 +68,14 @@ impl PyChain {
             .map_err(|_err| ValueError::py_err(format!("low-level block push failed: {}", _err)))
     }
 
-    fn push_unconfirmed(&self, tx: PyRef<PyTx>) -> PyResult<()> {
+    fn push_unconfirmed(&self, py: Python, tx: PyRef<PyTx>) -> PyResult<()> {
         let mut chain = self.lock();
         if chain.tables.is_closed {
             return Err(ValueError::py_err("already closed!"));
         }
-        let tx = tx.clone_to_tx();
-        if tx.is_coinbase() {
-            return Err(ValueError::py_err("you try to push coinbase as unconfirmed"));
+        let tx = tx.clone_to_verifiable(py)?;
+        if tx.body.is_coinbase() {
+            return Err(ValueError::py_err("try to push unconfirmed but coinbase tx"));
         }
         chain
             .push_unconfirmed(&tx)
@@ -101,7 +107,7 @@ impl PyChain {
             .get_tx(&U256::from(hash))
             .map_err(|_err| ValueError::py_err(_err))?
         {
-            Some(tx) => Ok(Some(PyTx::from_tx(py, tx)?)),
+            Some(tx) => Ok(Some(PyTx::from_recoded(py, tx)?)),
             None => Ok(None),
         }
     }

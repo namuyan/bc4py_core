@@ -2,7 +2,7 @@ use crate::balance::BalanceMovement;
 use crate::block::*;
 use crate::chain::{iters::*, utils::*};
 use crate::pickle::*;
-use crate::tx::*;
+use crate::tx::{BlockTxs, TxBody, TxInput, TxOutput, TxRecoded, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 use rocksdb::{DBIterator, Direction, IteratorMode, Options, WriteBatch, WriteOptions, DB};
@@ -233,7 +233,7 @@ impl Tables {
         match self.block.get(&u256_to_bytes(hash)) {
             Ok(value) => match value {
                 Some(value) => {
-                    let block = unpickle_block(value.as_slice())?;
+                    let block = unpickle_block(value.as_slice());
                     Ok(Some(block))
                 },
                 None => Ok(None),
@@ -242,12 +242,12 @@ impl Tables {
         }
     }
 
-    pub fn read_full_block(&self, hash: &U256) -> Result<Option<(Block, Vec<Tx>)>, String> {
+    pub fn read_full_block(&self, hash: &U256) -> Result<Option<(Block, BlockTxs)>, String> {
         // [blockhash 32b] -> [block bin Xb]
         match self.block.get(&u256_to_bytes(hash)) {
             Ok(value) => match value {
                 Some(value) => {
-                    let (block, txs, _) = unpickle_full_block(&value)?;
+                    let (block, txs, _) = unpickle_full_block(&value);
                     Ok(Some((block, txs)))
                 },
                 None => Ok(None),
@@ -276,7 +276,7 @@ impl Tables {
             .iterator(IteratorMode::From(&key, Direction::Forward))
     }
 
-    pub fn read_tx(&self, hash: &U256) -> Result<Option<Tx>, String> {
+    pub fn read_tx(&self, hash: &U256) -> Result<Option<TxRecoded>, String> {
         // tx_index: [txhash 32b] -> [height u32][offset u32]
         let txhash = u256_to_bytes(hash);
         match self.tx_index.get(&txhash) {
@@ -299,9 +299,9 @@ impl Tables {
                     offset += 4;
                     let sig_size = bytes_to_u32(&bytes[offset..offset + 4]) as usize;
                     offset += 4;
-                    let mut tx = Tx::from_bytes(&bytes[offset..offset + tx_size])?;
+                    let body = TxBody::from_bytes(&bytes[offset..offset + tx_size])?;
                     offset += tx_size;
-                    tx.restore_signature_from_bytes(&bytes[offset..offset + sig_size])?;
+                    let tx = TxRecoded::restore(body, &bytes[offset..offset + sig_size]);
                     // offset += sig_size;
 
                     // success
@@ -390,13 +390,13 @@ impl Tables {
         }
     }
 
-    pub fn read_mempool(&self, hash: &U256) -> Result<Option<Tx>, String> {
+    pub fn read_mempool(&self, hash: &U256) -> Result<Option<TxVerifiable>, String> {
         // [txhash 32b] -> [mempool bytes Xb]
         // note: don't include coinbase tx
         let key = u256_to_bytes(hash);
         match self.mempool.get(key.as_ref()) {
             Ok(value) => match value {
-                Some(value) => Ok(Some(unpickle_mempool(&value)?)),
+                Some(value) => Ok(Some(unpickle_mempool(&value))),
                 None => Ok(None),
             },
             Err(err) => Err(format!("database exception: {}", err.to_string())),
@@ -446,7 +446,7 @@ impl TableCursor<'_> {
         Ok(self.transaction_time.elapsed().as_secs_f32())
     }
 
-    pub fn write_block(&mut self, block: &Block, txs: &Vec<Tx>) -> Result<(), String> {
+    pub fn write_block(&mut self, block: &Block, txs: &Vec<TxVerifiable>) -> Result<(), String> {
         // [blockhash 32b] -> [height u32][time u32][work 32b][header 80b][flag u8][bias f32][tx_len u32] [tx0]..[txN]
 
         let key = sha256double(&block.header.to_bytes());
@@ -464,11 +464,11 @@ impl TableCursor<'_> {
         self.block_index.put(&key, &value).map_err(|err| err.to_string())
     }
 
-    pub fn write_utxo_index(&mut self, tx: &Tx) -> Result<(), String> {
+    pub fn write_utxo_index(&mut self, body: &TxBody) -> Result<(), String> {
         // [txhash 32b][output_index u8] -> [address 21b][coin_id u32][amount u64]
 
         // remove used UTXO
-        for input in tx.inputs.iter() {
+        for input in body.inputs.iter() {
             self.utxo_index
                 .delete(input.to_bytes().as_ref())
                 .map_err(|err| err.to_string())?;
@@ -476,9 +476,9 @@ impl TableCursor<'_> {
 
         // add unused UTXO
         let mut key = [0u8; 32 + 1];
-        let txhash = sha256double(tx.to_bytes().as_slice());
+        let txhash = sha256double(body.to_bytes().as_slice());
         write_slice(&mut key[0..32], &txhash);
-        for (index, output) in tx.outputs.iter().enumerate() {
+        for (index, output) in body.outputs.iter().enumerate() {
             key[32] = index as u8;
             self.utxo_index
                 .put(key.as_ref(), output.to_bytes().as_ref())
@@ -494,12 +494,12 @@ impl TableCursor<'_> {
         match self.tables.block.get(&u256_to_bytes(blockhash)) {
             Ok(value) => match value {
                 Some(value) => {
-                    let (block, txs, tx_offset): (_, _, _) = unpickle_full_block(&value)?;
+                    let (block, txs, tx_offset) = unpickle_full_block(&value);
                     let mut value = [0u8; 4 + 4];
                     write_slice(&mut value[0..4], &u32_to_bytes(block.height));
                     // check for each txhash include
                     for txhash in indexed_txs {
-                        match txs.iter().position(|tx| &tx.hash() == txhash) {
+                        match txs.position(txhash) {
                             Some(index) => {
                                 let offset = *tx_offset.get(index).unwrap() as u32;
                                 write_slice(&mut value[4..4 + 4], &u32_to_bytes(offset));
@@ -525,7 +525,7 @@ impl TableCursor<'_> {
         match self.tables.block.get(&u256_to_bytes(blockhash)) {
             Ok(value) => match value {
                 Some(value) => {
-                    let (block, txs, tx_offset) = unpickle_full_block(&value)?;
+                    let (block, txs, tx_offset) = unpickle_full_block(&value);
                     let mut value = [0u8; 4 + 4];
                     write_slice(&mut value[0..4], &u32_to_bytes(block.height));
                     assert_eq!(txs.len(), tx_offset.len());
@@ -619,14 +619,14 @@ impl TableCursor<'_> {
         }
     }
 
-    pub fn write_mempool(&mut self, tx: &Tx) -> Result<(), String> {
+    pub fn write_mempool(&mut self, tx: &TxVerifiable) -> Result<(), String> {
         // [txhash 32b] -> [mempool bytes Xb]
-        if tx.is_coinbase() {
+        if tx.body.is_coinbase() {
             return Err(format!("coinbase tx is not recode to mempool {:?}", tx));
         }
         // non-coinbase tx
-        let key = sha256double(&tx.to_bytes());
-        let value = pickle_mempool(tx)?;
+        let key = tx.body.hash();
+        let value = pickle_mempool(tx);
         self.mempool.put(&key, &value).map_err(|err| err.to_string())
     }
 

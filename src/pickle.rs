@@ -1,19 +1,16 @@
 use crate::block::*;
-use crate::tx::*;
+use crate::tx::{BlockTxs, TxBody, TxOutput, TxRecoded, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 
-pub fn pickle_full_block(block: &Block, txs: &Vec<Tx>) -> Result<Vec<u8>, String> {
-    // static: [height u32][work 32b][header 80b][flag u8][bias f32][tx_len u32][input_cache_len u32]
-    // dynamic: [tx0]..[txN] [input cache0]..[input cacheM]
+/// full block pickle
+/// static: [height u32][work 32b][header 80b][flag u8][bias f32][tx_len u32][input_cache_len u32]
+/// dynamic: [tx0]..[txN] [input cache0]..[input cacheM]
+
+pub fn pickle_full_block(block: &Block, txs: &Vec<TxVerifiable>) -> Result<Vec<u8>, String> {
     assert_eq!(block.txs_hash.len(), txs.len());
     assert!(0 < txs.len());
-    let input_cache: _ = txs
-        .get(0)
-        .unwrap()
-        .inputs_cache
-        .as_ref()
-        .expect("input_cache is none");
+    let input_cache = &txs.get(0).unwrap().inputs_cache;
     let mut value = Vec::with_capacity(4 + 32 + 80 + 1 + 4 + 4 + 4);
 
     // static
@@ -25,17 +22,11 @@ pub fn pickle_full_block(block: &Block, txs: &Vec<Tx>) -> Result<Vec<u8>, String
     value.extend_from_slice(&u32_to_bytes(txs.len() as u32));
     value.extend_from_slice(&u32_to_bytes(input_cache.len() as u32));
 
-    // txs check
-    let none: Vec<&Tx> = txs.iter().filter(|tx| tx.signature.is_none()).collect();
-    if 0 < none.len() {
-        return Err(format!("not found signature {}txs", none.len()));
-    }
-
     // malloc
     let size = txs.len() * 4 * 2
         + txs
             .iter()
-            .map(|tx| tx.get_size() + tx.get_signature_size().unwrap())
+            .map(|tx| tx.body.get_size() + tx.get_signature_size())
             .sum::<usize>()
         + input_cache.len() * 33;
     value.reserve(size);
@@ -43,10 +34,10 @@ pub fn pickle_full_block(block: &Block, txs: &Vec<Tx>) -> Result<Vec<u8>, String
     // tx
     for tx in txs.iter() {
         // [tx size u32][tx sig size u32][tx_b Xb][tx_sig Xb]
-        value.extend_from_slice(&u32_to_bytes(tx.get_size() as u32));
-        value.extend_from_slice(&u32_to_bytes(tx.get_signature_size()? as u32));
-        value.extend_from_slice(&tx.to_bytes());
-        value.extend_from_slice(&tx.get_signature_bytes()?);
+        value.extend_from_slice(&u32_to_bytes(tx.body.get_size() as u32));
+        value.extend_from_slice(&u32_to_bytes(tx.get_signature_size() as u32));
+        value.extend_from_slice(&tx.body.to_bytes());
+        value.extend_from_slice(&tx.get_signature_bytes());
     }
 
     // coinbase tx's input_cache
@@ -57,13 +48,11 @@ pub fn pickle_full_block(block: &Block, txs: &Vec<Tx>) -> Result<Vec<u8>, String
     Ok(value)
 }
 
-pub fn unpickle_full_block(bytes: &[u8]) -> Result<(Block, Vec<Tx>, Vec<usize>), String> {
-    // static: [height u32][work 32b][header 80b][flag u8][bias f32][tx_len u32][input_cache_len u32]
-    // dynamic: [tx0]..[txN] [input cache0]..[input cacheM]
+pub fn unpickle_full_block(bytes: &[u8]) -> (Block, BlockTxs, Vec<usize>) {
     let height = bytes_to_u32(&bytes[0..4]);
     let work_hash = U256::from(&bytes[4..4 + 32]);
     let header = BlockHeader::from_bytes(&bytes[36..36 + 80]);
-    let flag = BlockFlag::from_int(bytes[116])?;
+    let flag = BlockFlag::from_int(bytes[116]).unwrap();
     let bias = bytes_to_f32(&bytes[117..117 + 4]);
     let tx_len = bytes_to_u32(&bytes[121..121 + 4]) as usize;
     let input_cache_len = bytes_to_u32(&bytes[125..125 + 4]) as usize;
@@ -79,48 +68,48 @@ pub fn unpickle_full_block(bytes: &[u8]) -> Result<(Block, Vec<Tx>, Vec<usize>),
         pos += 4;
         let sig_size = bytes_to_u32(&bytes[pos..pos + 4]) as usize;
         pos += 4;
-        let mut tx = Tx::from_bytes(&bytes[pos..pos + tx_size])?;
+        let body = TxBody::from_bytes(&bytes[pos..pos + tx_size]).unwrap();
         pos += tx_size;
-        tx.restore_signature_from_bytes(&bytes[pos..pos + sig_size])?;
+        let tx = TxRecoded::restore(body, &bytes[pos..pos + sig_size]);
         pos += sig_size;
-        txs_hash.push(tx.hash());
+        txs_hash.push(tx.hash.clone());
         txs.push(tx);
     }
 
     // coinbase tx's input_cache
+    let coinbase = txs.remove(0);
     let mut input_cache = Vec::with_capacity(input_cache_len);
     for _ in 0..input_cache_len {
-        input_cache.push(TxOutput::from_bytes(&bytes[pos..pos + 33])?);
+        input_cache.push(TxOutput::from_bytes(&bytes[pos..pos + 33]).unwrap());
         pos += 33;
     }
-    txs.get_mut(0).unwrap().inputs_cache = Some(input_cache);
+    let coinbase = TxVerifiable {
+        hash: coinbase.hash,
+        body: coinbase.body,
+        signature: coinbase.signature,
+        inputs_cache: input_cache,
+    };
 
     // check
-    if pos == bytes.len() {
-        let block = Block {
-            work_hash,
-            height,
-            flag,
-            bias,
-            header,
-            txs_hash,
-        };
-        Ok((block, txs, tx_offset))
-    } else {
-        Err(format!(
-            "block restore failed by size mismatch {}!={}",
-            pos,
-            bytes.len()
-        ))
-    }
+    assert_eq!(bytes.len(), pos, "block restore failed by size mismatch");
+    // success
+    let block = Block {
+        work_hash,
+        height,
+        flag,
+        bias,
+        header,
+        txs_hash,
+    };
+    (block, BlockTxs::new(coinbase, txs), tx_offset)
 }
 
-pub fn unpickle_block(bytes: &[u8]) -> Result<Block, String> {
+pub fn unpickle_block(bytes: &[u8]) -> Block {
     // static
     let height = bytes_to_u32(&bytes[0..4]);
     let work_hash = U256::from(&bytes[4..4 + 32]);
     let header = BlockHeader::from_bytes(&bytes[36..36 + 80]);
-    let flag = BlockFlag::from_int(bytes[116])?;
+    let flag = BlockFlag::from_int(bytes[116]).unwrap();
     let bias = bytes_to_f32(&bytes[117..117 + 4]);
     let tx_len = bytes_to_u32(&bytes[121..121 + 4]) as usize;
     let input_cache_len = bytes_to_u32(&bytes[125..125 + 4]) as usize;
@@ -143,59 +132,58 @@ pub fn unpickle_block(bytes: &[u8]) -> Result<Block, String> {
     pos += input_cache_len * 33;
 
     // check
-    if pos == bytes.len() {
-        Ok(Block {
-            work_hash,
-            height,
-            flag,
-            bias,
-            header,
-            txs_hash,
-        })
-    } else {
-        Err(format!(
-            "block restore failed by size mismatch {}!={}",
-            pos,
-            bytes.len()
-        ))
+    assert_eq!(bytes.len(), pos, "block restore failed by size mismatch");
+    // success
+    Block {
+        work_hash,
+        height,
+        flag,
+        bias,
+        header,
+        txs_hash,
     }
 }
 
-pub fn pickle_mempool(tx: &Tx) -> Result<Vec<u8>, String> {
+pub fn pickle_mempool(tx: &TxVerifiable) -> Vec<u8> {
     // [tx size u32][sig size u32][input size u32][tx_b Xb][tx_sig Xb][input cache 33b]..
-    assert!(tx.inputs_cache.is_some());
-    assert!(tx.signature.is_some());
-    let inputs_cache = tx.inputs_cache.as_ref().unwrap();
-    let size = 12 + tx.get_size() + tx.get_signature_size()? + inputs_cache.len() * 33;
+    let inputs_cache = &tx.inputs_cache;
+    let size = 12 + tx.body.get_size() + tx.get_signature_size() + inputs_cache.len() * 33;
     let mut vec = Vec::with_capacity(size);
-    vec.extend_from_slice(&u32_to_bytes(tx.get_size() as u32));
-    vec.extend_from_slice(&u32_to_bytes(tx.get_signature_size()? as u32));
+    vec.extend_from_slice(&u32_to_bytes(tx.body.get_size() as u32));
+    vec.extend_from_slice(&u32_to_bytes(tx.get_signature_size() as u32));
     vec.extend_from_slice(&u32_to_bytes(inputs_cache.len() as u32));
-    vec.extend_from_slice(&tx.to_bytes());
-    vec.extend_from_slice(&tx.get_signature_bytes()?);
+    vec.extend_from_slice(&tx.body.to_bytes());
+    vec.extend_from_slice(&tx.get_signature_bytes());
     for output in inputs_cache {
         vec.extend_from_slice(output.to_bytes().as_ref());
     }
-    Ok(vec)
+    vec
 }
 
-pub fn unpickle_mempool(bytes: &[u8]) -> Result<Tx, String> {
+pub fn unpickle_mempool(bytes: &[u8]) -> TxVerifiable {
     // [tx size u32][sig size u32][input size u32][tx_b Xb][tx_sig Xb][input cache 33b]..
     let tx_size = bytes_to_u32(&bytes[0..4]) as usize;
     let sig_size = bytes_to_u32(&bytes[4..4 + 4]) as usize;
     let input_size = bytes_to_u32(&bytes[8..8 + 4]) as usize;
-    let mut tx = Tx::from_bytes(&bytes[12..12 + tx_size])?;
-    tx.restore_signature_from_bytes(&bytes[12 + tx_size..12 + tx_size + sig_size])?;
+    let body = TxBody::from_bytes(&bytes[12..12 + tx_size]).unwrap();
+    let tx = TxRecoded::restore(body, &bytes[12 + tx_size..12 + tx_size + sig_size]);
 
     let mut pos = 12 + tx_size + sig_size;
-    let mut input_cache = Vec::with_capacity(input_size);
+    let mut inputs_cache = Vec::with_capacity(input_size);
     for _ in 0..input_size {
-        input_cache.push(TxOutput::from_bytes(&bytes[pos..pos + 33])?);
+        inputs_cache.push(TxOutput::from_bytes(&bytes[pos..pos + 33]).unwrap());
         pos += 33;
     }
-    tx.inputs_cache = Some(input_cache);
+    let tx = TxVerifiable {
+        hash: tx.hash,
+        body: tx.body,
+        signature: tx.signature,
+        inputs_cache,
+    };
+    // check
     assert_eq!(pos, bytes.len());
-    Ok(tx)
+    // success
+    tx
 }
 
 #[allow(unused_imports)]
@@ -204,12 +192,13 @@ mod test {
     use crate::block::*;
     use crate::pickle::*;
     use crate::signature::*;
-    use crate::tx::*;
+    use crate::tx::{TxBody, TxManual, TxMessage, TxOutput, TxType, TxVerifiable};
     use crate::utils::*;
     use bigint::U256;
+    use streaming_iterator::StreamingIterator;
 
-    fn get_dummy_block() -> (Block, Vec<Tx>) {
-        let mut coinbase = Tx::new(
+    fn get_dummy_block() -> (Block, Vec<TxVerifiable>) {
+        let body = TxBody::new(
             2,
             TxType::PoW,
             100,
@@ -218,19 +207,31 @@ mod test {
             0,
             TxMessage::Plain("hello python".to_owned()),
         );
-        coinbase.inputs_cache = Some(vec![TxOutput(*b"222444422133331112332", 100, 200)]);
-        coinbase.signature = Some(vec![]);
+        let coinbase = TxVerifiable {
+            hash: U256::from(body.hash().as_slice()),
+            body,
+            signature: vec![],
+            inputs_cache: vec![TxOutput(*b"222444422133331112332", 100, 200)],
+        };
 
         // dummy tx
-        let mut tx = Tx::new(2, TxType::Transfer, 100, 200, 300, 100, TxMessage::Nothing);
+        let body = TxBody::new(2, TxType::Transfer, 100, 200, 300, 100, TxMessage::Nothing);
         let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798").unwrap();
         let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6").unwrap(); // r
         let s = hex::decode("7031A98831859DC34DFFEEDDA86831842CCD0079E1F92AF177F7F22CC1DCED05").unwrap(); // s
         let sig = Signature::new_single_sig(&pk, &r, &s).unwrap();
-        tx.signature = Some(vec![sig]);
+        let mut tx = TxVerifiable {
+            hash: U256::from(body.hash().as_slice()),
+            body,
+            signature: vec![sig],
+            inputs_cache: vec![],
+        };
 
         let txs = vec![coinbase, tx];
-        let tx_hash: Vec<U256> = txs.iter().map(|_tx| _tx.hash()).collect();
+        let tx_hash: Vec<U256> = txs
+            .iter()
+            .map(|_tx| U256::from(_tx.body.hash().as_slice()))
+            .collect();
 
         // dummy block
         let header = BlockHeader {
@@ -242,7 +243,7 @@ mod test {
             merkleroot: string_to_u256("016056c4b0a8f0a773934916f08a9cf6819ea56d8148d12ee6615e87b29b523c"),
         };
         let work_hash = string_to_u256("1281ff15ded46eecf06c4c65f2c63736680ec798e8fb4d1e1be005a100000000");
-        let mut block = Block::new(work_hash, 1000, BlockFlag::Genesis, 1.2, header, tx_hash);
+        let block = Block::new(work_hash, 1000, BlockFlag::Genesis, 1.2, header, tx_hash);
 
         (block, txs)
     }
@@ -255,10 +256,13 @@ mod test {
         let bytes = pickle_full_block(&block, &txs).unwrap();
 
         // decode
-        let (new_block, new_txs, _) = unpickle_full_block(&bytes).unwrap();
+        let (new_block, new_txs, _) = unpickle_full_block(&bytes);
         assert_eq!(new_block, block);
-        assert_eq!(new_txs.len(), 2);
-        assert_eq!(new_txs, txs);
+        assert_eq!(new_txs.len(), txs.len());
+        for (new_tx, tx) in new_txs.into_iter().zip(txs.into_iter()) {
+            let tx = tx.convert_recoded_tx();
+            assert_eq!(new_tx, tx);
+        }
     }
 
     #[test]
@@ -269,7 +273,7 @@ mod test {
         let bytes = pickle_full_block(&block, &txs).unwrap();
 
         // decode
-        let new_block = unpickle_block(&bytes).unwrap();
+        let new_block = unpickle_block(&bytes);
 
         assert_eq!(new_block, block);
     }
@@ -287,18 +291,22 @@ mod test {
         let sig1 = Signature::new_aggregate_sig(&pk, &r, &s).unwrap();
 
         // dummy
-        let mut tx = Tx::new(0, TxType::Transfer, 0, 0, 0, 0, TxMessage::Nothing);
-        tx.signature = Some(vec![sig0, sig1]);
-        tx.inputs_cache = Some(vec![
-            TxOutput(*b"000000000000000000000", 0, 10000),
-            TxOutput(*b"111111111111111111111", 2, 20000),
-        ]);
+        let body = TxBody::new(0, TxType::Transfer, 0, 0, 0, 0, TxMessage::Nothing);
+        let tx = TxVerifiable {
+            hash: U256::from(body.hash().as_slice()),
+            body,
+            signature: vec![sig0, sig1],
+            inputs_cache: vec![
+                TxOutput(*b"000000000000000000000", 0, 10000),
+                TxOutput(*b"111111111111111111111", 2, 20000),
+            ],
+        };
 
         // decode
-        let binary = pickle_mempool(&tx).unwrap();
+        let binary = pickle_mempool(&tx);
 
         // encode
-        let new_tx = unpickle_mempool(&binary).unwrap();
+        let new_tx = unpickle_mempool(&binary);
 
         assert_eq!(new_tx, tx);
     }

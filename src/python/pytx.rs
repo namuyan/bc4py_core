@@ -343,8 +343,8 @@ impl PyTx {
     }
 
     fn hash(&self, py: Python) -> PyObject {
-        let tx = self.clone_to_tx();
-        let hash = sha256double(&tx.to_bytes());
+        let tx = self.clone_to_manual(py);
+        let hash = tx.body.hash();
         PyBytes::new(py, hash.as_ref()).to_object(py)
     }
 
@@ -445,7 +445,7 @@ impl PyTx {
 
     pub fn getinfo(&self, py: Python) -> PyResult<PyObject> {
         let dict = PyDict::new(py);
-        let tx = self.clone_to_tx();
+        let tx = self.clone_to_manual(py);
 
         dict.set_item("hash", u256_to_hex(&tx.hash()))?;
         // dict.set_item("pos_amount", )?; REMOVED
@@ -456,6 +456,7 @@ impl PyTx {
         dict.set_item("deadline", self.deadline)?;
         {
             let inputs = tx
+                .body
                 .inputs
                 .iter()
                 .map(|input| (u256_to_hex(&input.0), input.1))
@@ -464,6 +465,7 @@ impl PyTx {
         }
         {
             let outputs = tx
+                .body
                 .outputs
                 .iter()
                 .map(|output| {
@@ -499,68 +501,87 @@ impl PyTx {
         // dict.set_item("hash_locked", )?; REMOVED
         // dict.set_item("recode_flag", )?; REMOVED
         // dict.set_item("create_time", )?; REMOVED
-        let body_size = tx.get_size();
+        let body_size = tx.body.get_size();
         dict.set_item("size", body_size)?;
         dict.set_item("total_size", match tx.get_signature_size() {
-            Ok(sign_size) => sign_size + body_size,
-            Err(_) => body_size,
+            Ok(sign_size) => Some(sign_size + body_size),
+            Err(_) => None::<usize>,
         })?;
-        dict.set_item("hex", hex::encode(tx.to_bytes()))?;
+        dict.set_item("hex", hex::encode(tx.body.to_bytes()))?;
         Ok(dict.to_object(py))
     }
 }
 
 // use on inner (not for Pyo3)
 impl PyTx {
-    pub fn from_tx(py: Python, tx: Tx) -> PyResult<PyTx> {
+    pub fn from_recoded(py: Python, tx: TxRecoded) -> PyResult<PyTx> {
         // convert from Tx to PyTx (moved)
         let inputs: _ = PyCell::new(py, PyTxInputs {
             iter_index: None,
-            inputs: tx.inputs,
+            inputs: tx.body.inputs,
         })?;
         let outputs: _ = PyCell::new(py, PyTxOutputs {
             iter_index: None,
-            outputs: tx.outputs,
+            outputs: tx.body.outputs,
         })?;
 
-        let signature = tx.signature.map(|signs| {
-            PyCell::new(py, PySignature { signs })
-                .expect("PyCell convert failed on sign")
-                .into()
-        });
+        let signature: &PyCell<PySignature> = PyCell::new(py, PySignature { signs: tx.signature })?;
         Ok(PyTx {
-            version: tx.version,
-            txtype: tx.txtype,
-            time: tx.time,
-            deadline: tx.deadline,
+            version: tx.body.version,
+            txtype: tx.body.txtype,
+            time: tx.body.time,
+            deadline: tx.body.deadline,
             inputs: inputs.into(),
             outputs: outputs.into(),
-            gas_price: tx.gas_price,
-            gas_amount: tx.gas_amount,
-            message: tx.message,
-            signature,
-            inputs_cache: tx.inputs_cache,
+            gas_price: tx.body.gas_price,
+            gas_amount: tx.body.gas_amount,
+            message: tx.body.message,
+            signature: Some(signature.into()),
+            inputs_cache: None,
         })
     }
 
-    pub fn clone_to_tx(&self) -> Tx {
-        // covert PyTx to Tx (cloned)
-        let gil = Python::acquire_gil();
-        let py = gil.python();
+    pub fn from_verifiable(py: Python, tx: TxVerifiable) -> PyResult<PyTx> {
+        // convert from Tx to PyTx (moved)
+        let inputs: _ = PyCell::new(py, PyTxInputs {
+            iter_index: None,
+            inputs: tx.body.inputs,
+        })?;
+        let outputs: _ = PyCell::new(py, PyTxOutputs {
+            iter_index: None,
+            outputs: tx.body.outputs,
+        })?;
+        let signature: &PyCell<PySignature> = PyCell::new(py, PySignature { signs: tx.signature })?;
+
+        Ok(PyTx {
+            version: tx.body.version,
+            txtype: tx.body.txtype,
+            time: tx.body.time,
+            deadline: tx.body.deadline,
+            inputs: inputs.into(),
+            outputs: outputs.into(),
+            gas_price: tx.body.gas_price,
+            gas_amount: tx.body.gas_amount,
+            message: tx.body.message,
+            signature: Some(signature.into()),
+            inputs_cache: Some(tx.inputs_cache),
+        })
+    }
+
+    pub fn clone_to_manual(&self, py: Python) -> TxManual {
+        // covert PyTx to manual tx
         let cell: &PyCell<PyTxInputs> = self.inputs.as_ref(py);
         let inputs_rc: PyRef<PyTxInputs> = cell.borrow();
         let cell: &PyCell<PyTxOutputs> = self.outputs.as_ref(py);
         let output_rc: PyRef<PyTxOutputs> = cell.borrow();
-        let signature = match self.signature.as_ref() {
-            Some(signature) => {
-                let cell: &PyCell<PySignature> = signature.as_ref(py);
-                let signature_rc: PyRef<PySignature> = cell.borrow();
-                Some(signature_rc.signs.to_vec())
-            },
-            None => None,
-        };
+        let signature = self.signature.as_ref().map(|sign| {
+            let cell: &PyCell<PySignature> = sign.as_ref(py);
+            let sign_rc: PyRef<PySignature> = cell.borrow();
+            sign_rc.signs.to_vec()
+        });
+        let inputs_cache = self.inputs_cache.clone();
 
-        Tx {
+        let body = TxBody {
             version: self.version,
             txtype: self.txtype.clone(),
             time: self.time,
@@ -570,8 +591,56 @@ impl PyTx {
             gas_price: self.gas_price,
             gas_amount: self.gas_amount,
             message: self.message.clone(),
+        };
+        TxManual {
+            body,
             signature,
-            inputs_cache: self.inputs_cache.clone(),
+            inputs_cache,
         }
+    }
+
+    pub fn clone_to_verifiable(&self, py: Python) -> PyResult<TxVerifiable> {
+        // covert PyTx to verifiable tx
+        let cell: &PyCell<PyTxInputs> = self.inputs.as_ref(py);
+        let inputs_rc: PyRef<PyTxInputs> = cell.borrow();
+        let cell: &PyCell<PyTxOutputs> = self.outputs.as_ref(py);
+        let output_rc: PyRef<PyTxOutputs> = cell.borrow();
+        let signature = match self.signature.as_ref() {
+            Some(signature) => {
+                let cell: &PyCell<PySignature> = signature.as_ref(py);
+                let signature_rc: PyRef<PySignature> = cell.borrow();
+                signature_rc.signs.to_vec()
+            },
+            None => {
+                return Err(ValueError::py_err(
+                    "cannot clone to VerifiableTx because signature is none",
+                ))
+            },
+        };
+        let inputs_cache = self
+            .inputs_cache
+            .as_ref()
+            .ok_or(ValueError::py_err(
+                "cannot clone to VerifiableTx because inputs_cache is none",
+            ))?
+            .clone();
+
+        let body = TxBody {
+            version: self.version,
+            txtype: self.txtype.clone(),
+            time: self.time,
+            deadline: self.deadline,
+            inputs: inputs_rc.inputs.clone(),
+            outputs: output_rc.outputs.clone(),
+            gas_price: self.gas_price,
+            gas_amount: self.gas_amount,
+            message: self.message.clone(),
+        };
+        Ok(TxVerifiable {
+            hash: U256::from(body.hash().as_slice()),
+            body,
+            signature,
+            inputs_cache,
+        })
     }
 }

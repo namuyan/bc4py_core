@@ -90,8 +90,8 @@ impl Iterator for UnspentIter<'_> {
                     .expect("database exception rare case?")
                     .expect("not found block on tables?");
                 for tx in txs.into_iter() {
-                    let txhash = tx.hash();
-                    for (txindex, output) in tx.outputs.into_iter().enumerate() {
+                    let txhash = tx.hash.clone();
+                    for (txindex, output) in tx.body.outputs.into_iter().enumerate() {
                         // find unspent
                         if output.0 == self.addr {
                             // check used on confirmed
@@ -133,7 +133,7 @@ impl Iterator for UnspentIter<'_> {
                     .read_mempool(&txhash)
                     .expect("table read exception?")
                     .expect("not found tx on mempool?");
-                for (txindex, output) in tx.outputs.into_iter().enumerate() {
+                for (txindex, output) in tx.body.outputs.into_iter().enumerate() {
                     // find unspent
                     if output.0 == self.addr {
                         // check used on unconfirmed

@@ -1,201 +1,33 @@
 use crate::signature::*;
+use crate::tx::*;
 use crate::utils::*;
 use bigint::U256;
+use std::fmt;
 
-type Address = [u8; 21];
-
+/// transaction body
 #[derive(Clone, PartialEq)]
-pub struct TxInput(pub U256, pub u8); // (txhash, txindex)
-
-impl std::fmt::Debug for TxInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // input(txhash, txindex)
-        let hash = hex::encode(u256_to_bytes(&self.0).as_ref());
-        f.debug_tuple("input").field(&hash).field(&self.1).finish()
-    }
-}
-
-impl TxInput {
-    #[inline]
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() != 33 {
-            Err("cannot decode tx input".to_owned())
-        } else {
-            Ok(TxInput(U256::from(&bytes[0..32]), bytes[32]))
-        }
-    }
-    #[inline]
-    pub fn to_bytes(&self) -> [u8; 33] {
-        let mut slice = [0u8; 33];
-        self.0.to_big_endian(&mut slice[0..32]);
-        slice[32] = self.1;
-        slice
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct TxOutput(pub Address, pub u32, pub u64); // (address<ver+ripemd160>, coinId, amount)
-
-impl TxOutput {
-    #[inline]
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() != 33 {
-            Err("cannot decode tx output".to_owned())
-        } else {
-            let mut address = [0u8; 21];
-            address.clone_from_slice(&bytes[0..21]);
-            let coin_id = bytes_to_u32(&bytes[21..21 + 4]);
-            let amount = bytes_to_u64(&bytes[25..25 + 8]);
-            Ok(TxOutput(address, coin_id, amount))
-        }
-    }
-    #[inline]
-    pub fn to_bytes(&self) -> [u8; 33] {
-        let mut slice = [0u8; 33];
-        write_slice(&mut slice[0..21], &self.0);
-        write_slice(&mut slice[21..21 + 4], &u32_to_bytes(self.1));
-        write_slice(&mut slice[25..25 + 8], &u64_to_bytes(self.2));
-        slice
-    }
-}
-
-/// transaction type
-/// https://github.com/kumacoinproject/bc4py/blob/develop/bc4py/config.py#L43
-#[derive(Clone, PartialEq, Debug)]
-pub enum TxType {
-    Genesis,
-    PoW,
-    PoS,
-    Transfer,
-    Mint,
-    // Inner,
-}
-
-impl TxType {
-    pub fn from_int(int: u32) -> Result<TxType, String> {
-        match int {
-            0 => Ok(TxType::Genesis),
-            1 => Ok(TxType::PoW),
-            2 => Ok(TxType::PoS),
-            3 => Ok(TxType::Transfer),
-            4 => Ok(TxType::Mint),
-            // 255 => Ok(TxType::Inner),
-            i => Err(format!("not found txtype {}", i)),
-        }
-    }
-    pub fn to_int(&self) -> u32 {
-        match self {
-            TxType::Genesis => 0,
-            TxType::PoW => 1,
-            TxType::PoS => 2,
-            TxType::Transfer => 3,
-            TxType::Mint => 4,
-            // TxType::Inner => 255,
-        }
-    }
-}
-
-/// transaction message format
-/// https://github.com/kumacoinproject/bc4py/blob/develop/bc4py/config.py#L59
-#[derive(Clone, PartialEq, Debug)]
-pub enum TxMessage {
-    Nothing,
-    Plain(String),
-    Byte(Vec<u8>),
-    // MsgPack(Vec<u8>),
-    // HashLocked(Vec<u8>),
-}
-
-impl TxMessage {
-    pub fn new(message_type: u8, message: Vec<u8>) -> Result<Self, String> {
-        if 0xffff < message.len() {
-            return Err(format!("tx message is too long len={}", message.len()));
-        }
-        match message_type {
-            0 => Ok(TxMessage::Nothing),
-            1 => Ok(TxMessage::Plain(
-                String::from_utf8(message).map_err(|_| "is not UTF8".clone())?,
-            )),
-            2 => Ok(TxMessage::Byte(message)),
-            i => Err(format!("not found message type {}", i)),
-        }
-    }
-    /// get message type int
-    pub fn to_int(&self) -> u8 {
-        match self {
-            TxMessage::Nothing => 0,
-            TxMessage::Plain(_) => 1,
-            TxMessage::Byte(_) => 2,
-            // TxMessage::MsgPack(_) => 3,
-            // TxMessage:HashLocked(_) => 4,
-        }
-    }
-    pub fn to_type(&self) -> &'static str {
-        // for debug
-        match self {
-            TxMessage::Nothing => "None",
-            TxMessage::Plain(_) => "Plain",
-            TxMessage::Byte(_) => "Byte",
-        }
-    }
-    pub fn to_bytes(&'a self) -> &'a [u8] {
-        match self {
-            TxMessage::Nothing => &[],
-            TxMessage::Plain(s) => s.as_bytes(),
-            TxMessage::Byte(b) => b.as_slice(),
-            // TxMessage::MsgPack(_) => ?,
-            // TxMessage:HashLocked(_) => ?,
-        }
-    }
-    pub fn to_string(&self) -> String {
-        // for debug
-        match self {
-            TxMessage::Nothing => "".to_owned(),
-            TxMessage::Plain(p) => p.clone(),
-            TxMessage::Byte(b) => hex::encode(b), // hex
-        }
-    }
-    pub fn length(&self) -> usize {
-        match self {
-            TxMessage::Nothing => 0,
-            TxMessage::Plain(s) => s.as_bytes().len(),
-            TxMessage::Byte(b) => b.len(),
-            // TxMessage::MsgPack(_) => ?,
-            // TxMessage:HashLocked(_) => ?,
-        }
-    }
-}
-
-/// Tx structure
-///
-/// bytes static: [version u32][type u32][time u32][deadline u32][gas_price u32][gas_amount i64][msg_type u8][input_len u8][output_len u8][msg_len u32]
-/// bytes dynamic: [inputs ?*33b][outputs ?*33b][msg ?b]
-#[derive(PartialEq)]
-pub struct Tx {
-    // TX body
-    pub version: u32,   // 4bytes int
-    pub txtype: TxType, // 4bytes int
-    pub time: u32,      // 4bytes int
-    pub deadline: u32,  // 4bytes int
+pub struct TxBody {
+    pub version: u32,
+    pub txtype: TxType,
+    pub time: u32,
+    pub deadline: u32,
     pub inputs: Vec<TxInput>,
     pub outputs: Vec<TxOutput>,
-    pub gas_price: u64,     // fee
-    pub gas_amount: i64,    // fee
-    pub message: TxMessage, // length type is 2bytes but real length limit to 65536
-
-    // for verify
-    pub signature: Option<Vec<Signature>>,
-    pub inputs_cache: Option<Vec<TxOutput>>,
+    // fee
+    pub gas_price: u64,
+    pub gas_amount: i64,
+    // length type is 2bytes but real length limit to 65536
+    pub message: TxMessage,
 }
 
-impl std::fmt::Debug for Tx {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for TxBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hash = hex::encode(sha256double(&self.to_bytes()));
-        f.debug_tuple("tx").field(&hash).finish()
+        f.debug_tuple("TxBody").field(&hash).finish()
     }
 }
 
-impl Tx {
+impl TxBody {
     pub fn new(
         version: u32,
         txtype: TxType,
@@ -206,7 +38,7 @@ impl Tx {
         message: TxMessage,
     ) -> Self {
         assert!(message.length() <= 0xffff);
-        Tx {
+        TxBody {
             version,
             txtype,
             time,
@@ -216,20 +48,17 @@ impl Tx {
             gas_price,
             gas_amount,
             message,
-            signature: None,
-            inputs_cache: None,
         }
     }
 
-    pub fn hash(&self) -> U256 {
-        U256::from(sha256double(&self.to_bytes()).as_slice())
+    pub fn hash(&self) -> Vec<u8> {
+        sha256double(&self.to_bytes())
     }
 
     pub fn get_size(&self) -> usize {
         39 + self.inputs.len() * 33 + self.outputs.len() * 33 + self.message.length()
     }
 
-    /// TX binary (without signature)
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut vec = Vec::with_capacity(self.get_size());
 
@@ -310,7 +139,7 @@ impl Tx {
         let message_bytes = bytes[position..position + msg_len].to_vec();
         let message = TxMessage::new(message_type, message_bytes)?;
 
-        Ok(Tx {
+        Ok(TxBody {
             version,
             txtype,
             time,
@@ -320,13 +149,118 @@ impl Tx {
             gas_price,
             gas_amount,
             message,
-            signature: None,
-            inputs_cache: None,
         })
     }
 
     pub fn is_coinbase(&self) -> bool {
         self.txtype == TxType::PoW || self.txtype == TxType::PoS
+    }
+
+    pub fn get_depends_of_inputs(&self) -> Vec<U256> {
+        self.inputs
+            .iter()
+            .map(|input| input.0.clone())
+            .collect::<Vec<U256>>()
+    }
+}
+
+/// from tables **read-only**
+#[derive(Clone, PartialEq, Debug)]
+pub struct TxRecoded {
+    pub hash: U256,
+    pub body: TxBody,
+    pub signature: Vec<Signature>,
+}
+
+impl TxRecoded {
+    pub fn restore(body: TxBody, sign: &[u8]) -> Self {
+        let mut signature = Vec::with_capacity(sign.len() / (33 + 32 + 32) + 1);
+        let mut pos = 0;
+        while pos < sign.len() {
+            let sign = bytes_to_signature(&sign[pos..]).unwrap();
+            pos += get_signature_size(&sign);
+            signature.push(sign);
+        }
+        assert_eq!(sign.len(), pos, "signature deserialize failed by mismatch");
+        TxRecoded {
+            hash: U256::from(body.hash().as_slice()),
+            body,
+            signature,
+        }
+    }
+
+    pub fn get_signature_size(&self) -> usize {
+        let mut size = 0;
+        for signature in self.signature.iter() {
+            size += get_signature_size(signature);
+        }
+        size
+    }
+
+    pub fn get_signature_bytes(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(self.signature.len() * (33 + 32 + 32));
+        for signature in self.signature.iter() {
+            signature_to_bytes(signature, &mut vec);
+        }
+        vec
+    }
+}
+
+/// **read-only**
+/// form tables (coinbase) and from mempool (normal)
+#[derive(Clone, PartialEq, Debug)]
+pub struct TxVerifiable {
+    pub hash: U256,
+    pub body: TxBody,
+    pub signature: Vec<Signature>,
+    pub inputs_cache: Vec<TxOutput>,
+}
+
+impl TxVerifiable {
+    pub fn get_signature_size(&self) -> usize {
+        let mut size = 0;
+        for signature in self.signature.iter() {
+            size += get_signature_size(signature);
+        }
+        size
+    }
+
+    pub fn get_signature_bytes(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(self.signature.len() * (33 + 32 + 32));
+        for signature in self.signature.iter() {
+            signature_to_bytes(signature, &mut vec);
+        }
+        vec
+    }
+
+    pub fn convert_recoded_tx(self) -> TxRecoded {
+        TxRecoded {
+            hash: self.hash,
+            body: self.body,
+            signature: self.signature,
+        }
+    }
+}
+
+/// manually generated to convert to `TxVerifiable`
+#[derive(Clone, PartialEq, Debug)]
+pub struct TxManual {
+    pub body: TxBody,
+    pub signature: Option<Vec<Signature>>,
+    pub inputs_cache: Option<Vec<TxOutput>>,
+}
+
+impl TxManual {
+    pub fn new(body: TxBody) -> Self {
+        TxManual {
+            body,
+            signature: None,
+            inputs_cache: None,
+        }
+    }
+
+    pub fn hash(&self) -> U256 {
+        U256::from(self.body.hash().as_slice())
     }
 
     pub fn get_signature_size(&self) -> Result<usize, String> {
@@ -357,32 +291,38 @@ impl Tx {
             let len = self.signature.as_ref().unwrap().len();
             return Err(format!("signature is already inserted len={}", len));
         }
-        let mut signature_vec = Vec::with_capacity(bytes.len() / (33 + 32 + 32) + 1);
-        let mut position = 0;
-        while position < bytes.len() {
-            let signature = bytes_to_signature(&bytes[position..])?;
-            position += get_signature_size(&signature);
-            signature_vec.push(signature);
+        let mut sign_vec = Vec::with_capacity(bytes.len() / (33 + 32 + 32) + 1);
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let signature = bytes_to_signature(&bytes[pos..])?;
+            pos += get_signature_size(&signature);
+            sign_vec.push(signature);
         }
-        if bytes.len() != position {
-            return Err(format!("signature decode failed {}!={}", bytes.len(), position));
+        if bytes.len() != pos {
+            return Err(format!("signature decode failed {}!={}", bytes.len(), pos));
         }
-        self.signature = Some(signature_vec);
+        self.signature = Some(sign_vec);
         Ok(())
     }
 
-    pub fn get_depends_of_inputs(&self) -> Vec<U256> {
-        self.inputs
-            .iter()
-            .map(|input| input.0.clone())
-            .collect::<Vec<U256>>()
+    pub fn convert_verifiable(self) -> Result<TxVerifiable, String> {
+        Ok(TxVerifiable {
+            hash: self.hash(),
+            body: self.body,
+            signature: self
+                .signature
+                .ok_or("cannot convert to verifiable because signature is none".to_owned())?,
+            inputs_cache: self
+                .inputs_cache
+                .ok_or("cannot convert to verifiable because input_cache is none".to_owned())?,
+        })
     }
 }
 
 #[allow(unused_imports)]
 #[cfg(test)]
 mod tx {
-    use crate::python::utils::string2addr;
+    use crate::python::utils::{set_global_hrp, string2addr};
     use crate::signature::Signature;
     use crate::tx::*;
     use crate::utils::*;
@@ -400,27 +340,30 @@ mod tx {
             0,
         )];
 
+        // debug use `test` prefix
+        set_global_hrp("test");
+
         let address = string2addr("test1qtwh6gp46daflg4e6f4dg79mptesawx4j4gy0dl").unwrap();
         let outputs = vec![TxOutput(address, 0, 13220952118)];
         let message = TxMessage::Nothing;
 
         // decode
-        let tx = Tx::from_bytes(&binary).unwrap();
+        let body = TxBody::from_bytes(&binary).unwrap();
 
-        assert_eq!(tx.version, 0);
-        assert_eq!(tx.txtype, TxType::PoS);
-        assert_eq!(tx.time, 1585866688 - genesis_time);
-        assert_eq!(tx.deadline, 1585877488 - genesis_time);
-        assert_eq!(tx.inputs, inputs);
-        assert_eq!(tx.outputs, outputs);
-        assert_eq!(tx.message, message);
+        assert_eq!(body.version, 0);
+        assert_eq!(body.txtype, TxType::PoS);
+        assert_eq!(body.time, 1585866688 - genesis_time);
+        assert_eq!(body.deadline, 1585877488 - genesis_time);
+        assert_eq!(body.inputs, inputs);
+        assert_eq!(body.outputs, outputs);
+        assert_eq!(body.message, message);
 
         // encode
         assert_eq!(
-            hex::encode(tx.to_bytes().as_slice()),
+            hex::encode(body.to_bytes().as_slice()),
             hex::encode(binary.as_slice())
         );
-        assert_eq!(tx.hash(), U256::from(hash.as_slice()));
+        assert_eq!(body.hash(), hash);
     }
 
     #[test]
@@ -436,7 +379,8 @@ mod tx {
         let sig1 = Signature::new_aggregate_sig(&pk, &r, &s).unwrap();
 
         // dummy
-        let mut tx = Tx::new(0, TxType::Transfer, 0, 0, 0, 0, TxMessage::Nothing);
+        let body = TxBody::new(0, TxType::Transfer, 0, 0, 0, 0, TxMessage::Nothing);
+        let mut tx = TxManual::new(body);
         tx.signature = Some(vec![sig0, sig1]);
 
         // decode

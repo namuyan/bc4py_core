@@ -5,6 +5,8 @@ extern crate bigint;
 extern crate num_bigint;
 extern crate num_traits;
 extern crate sha2;
+#[macro_use]
+extern crate lazy_static;
 
 pub mod balance;
 pub mod block;

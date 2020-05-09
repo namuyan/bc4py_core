@@ -1,7 +1,7 @@
 use crate::chain::confirmed::BlockHashVec;
 use crate::chain::tables::*;
 use crate::pickle::*;
-use crate::tx::*;
+use crate::tx::{TxInput, TxOutput, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 use bloomfilter::Bloom;
@@ -55,7 +55,7 @@ impl UnconfirmedBuilder {
             if include_txs.contains(&hash) {
                 continue;
             }
-            let tx = unpickle_mempool(bytes.as_ref())?;
+            let tx = unpickle_mempool(bytes.as_ref());
             unconfirmed.push_new_tx(&tx)?;
         }
         Ok(unconfirmed)
@@ -80,7 +80,7 @@ impl UnconfirmedBuilder {
                 let tx = tables
                     .read_mempool(&unconfirmed.hash)?
                     .expect("try to get unconfirmed from mempool?");
-                if tx.inputs.contains(input) {
+                if tx.body.inputs.contains(input) {
                     return Ok(true);
                 }
             }
@@ -88,12 +88,12 @@ impl UnconfirmedBuilder {
         Ok(false)
     }
 
-    pub fn push_new_tx(&mut self, tx: &Tx) -> Result<usize, String> {
+    pub fn push_new_tx(&mut self, tx: &TxVerifiable) -> Result<usize, String> {
         // push new unconfirmed tx, return inserted index
-        let hash = tx.hash();
+        let hash = tx.hash.clone();
 
         // get raw dependency of input hash
-        let mut depend_hashs = tx.inputs.iter().map(|input| input.0).collect::<Vec<U256>>();
+        let mut depend_hashs = tx.body.inputs.iter().map(|input| input.0).collect::<Vec<U256>>();
 
         // remove duplicate depend_hashs
         depend_hashs.sort_unstable();
@@ -105,24 +105,23 @@ impl UnconfirmedBuilder {
         // get bloom filter of input & output address
         // note: 1% false-positive rate (by 614 bytes filter & 100 items)
         // note: maximum bitmap_size is 400bytes
-        let input_cache: _ = tx.inputs_cache.as_ref().expect("input_cache is none?");
-        let items_count = std::cmp::max(4, input_cache.len() + tx.outputs.len());
+        let items_count = std::cmp::max(4, tx.inputs_cache.len() + tx.body.outputs.len());
         let bitmap_size = Bloom::<Address>::compute_bitmap_size(items_count, FP_P);
         let mut depend_addrs: _ = Bloom::<Address>::new(bitmap_size, items_count);
-        input_cache
+        tx.inputs_cache
             .iter()
             .map(|output| &output.0)
-            .chain(tx.outputs.iter().map(|output| &output.0))
+            .chain(tx.body.outputs.iter().map(|output| &output.0))
             .for_each(|addr| depend_addrs.set(addr));
 
         let unconfirmed = Unconfirmed {
             hash,
             depend_hashs,
             depend_addrs,
-            price: tx.gas_price,
-            time: tx.time,
-            deadline: tx.deadline,
-            size: tx.get_size() as u32,
+            price: tx.body.gas_price,
+            time: tx.body.time,
+            deadline: tx.body.deadline,
+            size: tx.body.get_size() as u32,
         };
 
         // push
@@ -246,7 +245,7 @@ impl UnconfirmedBuilder {
             if unconfirmed.depend_hashs.contains(&input.0) {
                 match tables.read_mempool(&unconfirmed.hash)? {
                     Some(tx) => {
-                        if tx.inputs.contains(input) {
+                        if tx.body.inputs.contains(input) {
                             output.take(); // <= None
                         }
                     },
@@ -258,6 +257,7 @@ impl UnconfirmedBuilder {
             if unconfirmed.hash == input.0 {
                 let tx = tables.read_mempool(&unconfirmed.hash)?.unwrap();
                 let inner = tx
+                    .body
                     .outputs
                     .get(input.1 as usize)
                     .ok_or("txindex is out of range on unconfirmed".to_owned())?

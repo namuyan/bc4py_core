@@ -1,12 +1,13 @@
 use crate::block::*;
 use crate::chain::tables::Tables;
-use crate::tx::*;
+use crate::tx::{TxInput, TxOutput, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use streaming_iterator::StreamingIterator;
 
 /// [block(n), block(n-1),.. ,block(n-m)]
 pub type BlockHashVec = Vec<U256>;
@@ -15,7 +16,7 @@ struct Confirmed {
     hash: U256, // block header hash
     block: Block,
     score: f64,
-    coinbase: Tx,
+    coinbase: TxVerifiable,
 
     // summarize txs
     inputs: Vec<TxInput>,
@@ -28,24 +29,19 @@ impl Confirmed {
             .read_full_block(&hash)?
             .expect("already write to table but not found block");
         let score = block.calc_score();
-        let input_size = txs.iter().map(|_tx| _tx.inputs.len()).sum();
-        let output_size = txs.iter().map(|_tx| _tx.outputs.len()).sum();
+        let mut input_size = 0;
+        let mut output_size = 0;
+        while let Some(body) = txs.iter().next() {
+            input_size += body.inputs.len();
+            output_size += body.outputs.len();
+        }
         let mut inputs = Vec::with_capacity(input_size);
         let mut outputs = Vec::with_capacity(output_size);
-        let mut coinbase = None;
-        for (index, tx) in txs.into_iter().enumerate() {
-            if index == 0 {
-                // clone coinbase tx
-                inputs.extend(tx.inputs.iter().map(|_input| _input.clone()));
-                outputs.extend(tx.outputs.iter().map(|_output| _output.clone()));
-                coinbase = Some(tx);
-            } else {
-                inputs.extend(tx.inputs.into_iter());
-                outputs.extend(tx.outputs.into_iter());
-            }
+        let coinbase = txs.0;
+        for tx in txs.1.into_iter() {
+            inputs.extend(tx.body.inputs.into_iter());
+            outputs.extend(tx.body.outputs.into_iter());
         }
-        let coinbase = coinbase.unwrap();
-        assert!(coinbase.inputs_cache.is_some());
         Ok(Confirmed {
             hash,
             block,
@@ -231,6 +227,7 @@ impl ConfirmedBuilder {
             if confirmed.hash == input.0 {
                 let tx = tables.read_mempool(&confirmed.hash)?.unwrap();
                 let inner = tx
+                    .body
                     .outputs
                     .get(input.1 as usize)
                     .ok_or("txindex is out of range on confirmed".to_owned())?
@@ -272,7 +269,7 @@ impl ConfirmedBuilder {
         Ok((best_chain_before, best_chain_after))
     }
 
-    pub fn truncate_old_blocks(&mut self, chunk: usize, limit: usize) -> Option<Vec<(Block, Tx)>> {
+    pub fn truncate_old_blocks(&mut self, chunk: usize, limit: usize) -> Option<Vec<(Block, TxVerifiable)>> {
         // remove `chunk` size when best_chain is over `limit` size
         assert!(0 < chunk && chunk < limit);
 
@@ -318,7 +315,7 @@ impl ConfirmedBuilder {
             moved
                 .into_iter()
                 .map(|_confirmed| (_confirmed.block, _confirmed.coinbase))
-                .collect::<Vec<(Block, Tx)>>(),
+                .collect::<Vec<(Block, TxVerifiable)>>(),
         )
     }
 

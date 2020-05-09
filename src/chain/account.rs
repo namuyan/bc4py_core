@@ -1,7 +1,7 @@
 use crate::balance::*;
 use crate::block::Block;
 use crate::chain::tables::{TableCursor, Tables};
-use crate::tx::*;
+use crate::tx::TxVerifiable;
 use crate::utils::*;
 use hdwallet::traits::{Deserialize, Serialize};
 use hdwallet::{error::Error, ExtendedPrivKey, ExtendedPubKey, KeyIndex};
@@ -327,13 +327,11 @@ impl AccountBuilder {
         None
     }
 
-    pub fn update_by_tx(&mut self, tx: &Tx, cur: &mut TableCursor) -> Result<(), Error> {
+    pub fn update_by_tx(&mut self, tx: &TxVerifiable, cur: &mut TableCursor) -> Result<(), Error> {
         // use when accept unconfirmed tx
         // note: update `unused_index` and `listen_*`
-        let inputs_cache = tx
-            .inputs_cache
-            .as_ref()
-            .expect("inputs_cache is none when accept new unconfirmed tx");
+        let inputs_cache = &tx.inputs_cache;
+        let body = &tx.body;
 
         // calc fee by `incoming - outgoing`
         let mut fee = Balances(Vec::with_capacity(1));
@@ -344,7 +342,7 @@ impl AccountBuilder {
                 amount: output.2 as i64,
             })
             .for_each(|balance| fee.add_balance(&balance));
-        tx.outputs
+        body.outputs
             .iter()
             .map(|output| Balance {
                 coin_id: output.1,
@@ -352,8 +350,8 @@ impl AccountBuilder {
             })
             .for_each(|balance| fee.sub_balance(&balance));
         fee.compaction();
-        assert_eq!(fee.sum(), tx.gas_amount * tx.gas_price as i64);
-        let mut movement = BalanceMovement::new(tx.hash(), fee);
+        assert_eq!(fee.sum(), body.gas_amount * body.gas_price as i64);
+        let mut movement = BalanceMovement::new(tx.hash, fee);
 
         // inputs
         for inputs_cache in inputs_cache.iter() {
@@ -368,7 +366,7 @@ impl AccountBuilder {
         }
 
         // outputs
-        for output in tx.outputs.iter() {
+        for output in body.outputs.iter() {
             let addr = &output.0;
             for account in self.accounts.iter_mut() {
                 match account.check_and_expand_listen(addr)? {
