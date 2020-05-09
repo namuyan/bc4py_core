@@ -149,6 +149,7 @@ impl UnconfirmedBuilder {
 
     pub fn remove_many(&mut self, hashs: &Vec<U256>) {
         // note: no error even if no delete tx
+        // note: don't remove from txcache
 
         //require reorder after remove the hash
         let mut deleted = Vec::with_capacity(hashs.len());
@@ -169,12 +170,31 @@ impl UnconfirmedBuilder {
         }
     }
 
-    #[allow(dead_code)]
-    fn remove_with_depends(&mut self, hash: &U256) -> usize {
-        // remove unconfirmed tx with depend and return delete count
-        let mut deleted: Vec<Unconfirmed> = Vec::new();
-        self.remove_with_depend_myself(hash, &mut deleted);
-        deleted.len()
+    pub fn remove_by_duplicate_inputs(
+        &mut self,
+        tables: &Tables,
+        inputs: &Vec<TxInput>,
+    ) -> Result<(), String> {
+        // remove unconfirmed txs with same inputs
+        // this method is used to force push new tx included in new block
+
+        // find all same input use txs
+        let mut hashs = Vec::new();
+        for input in inputs.iter() {
+            for unconfirmed in self.unconfirmed.iter() {
+                if unconfirmed.depend_hashs.contains(&input.0) {
+                    let tx = tables.read_txcache(&unconfirmed.hash)?.unwrap();
+                    if tx.body.inputs.contains(input) {
+                        hashs.push(tx.hash);
+                    }
+                }
+            }
+        }
+
+        // remove many at once with depends
+        self.remove_many(&hashs);
+
+        Ok(())
     }
 
     pub fn get_size_limit_list(&self, maxsize: u32, deadline: u32) -> Vec<U256> {
@@ -200,7 +220,7 @@ impl UnconfirmedBuilder {
         }
     }
 
-    pub fn remove_expired_txs(&mut self, deadline: u32, cur: &mut TableCursor) -> Vec<U256> {
+    pub fn remove_expired_txs(&mut self, deadline: u32) -> Vec<U256> {
         // remove expired unconfirmed txs
         // note: remove from this and tables
         let mut deleted: Vec<Unconfirmed> = Vec::new();
@@ -218,11 +238,6 @@ impl UnconfirmedBuilder {
                 Some(hash) => self.remove_with_depend_myself(&hash, &mut deleted),
                 None => break,
             };
-        }
-
-        // remove from tables
-        for tx in deleted.iter() {
-            cur.remove_from_txcache(&tx.hash).unwrap();
         }
 
         // return expired tx's hashs
@@ -243,13 +258,9 @@ impl UnconfirmedBuilder {
 
             // input already used & set output None
             if unconfirmed.depend_hashs.contains(&input.0) {
-                match tables.read_txcache(&unconfirmed.hash)? {
-                    Some(tx) => {
-                        if tx.body.inputs.contains(input) {
-                            output.take(); // <= None
-                        }
-                    },
-                    None => return Err("input's hash isn't found in txcache".to_owned()),
+                let tx = tables.read_txcache(&unconfirmed.hash)?.unwrap();
+                if tx.body.inputs.contains(input) {
+                    output.take(); // <= None
                 }
             }
 

@@ -67,9 +67,7 @@ impl Chain {
             UnconfirmedBuilder::new()
         } else {
             let mut unconfirmed: _ = UnconfirmedBuilder::restore_from_txcache(&tables, &best_chain)?;
-            let mut cur = tables.transaction();
-            unconfirmed.remove_expired_txs(deadline, &mut cur);
-            cur.commit().unwrap();
+            unconfirmed.remove_expired_txs(deadline);
             unconfirmed
         };
 
@@ -213,6 +211,11 @@ impl Chain {
         if self.unconfirmed.have_the_tx(&tx.hash) {
             return Err(format!("tx is already unconfirmed {:?}", tx));
         }
+
+        // remove txs with duplicate input have
+        // note: need to check input already used or not before
+        self.unconfirmed
+            .remove_by_duplicate_inputs(&cur.tables, &tx.body.inputs)?;
 
         // insert
         self.unconfirmed.push_new_tx(&tx)?;

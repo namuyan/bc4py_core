@@ -633,6 +633,9 @@ impl TableCursor<'_> {
     pub fn remove_from_txcache(&mut self, hash: &U256) -> Result<(), String> {
         // [txhash 32b] -> [txcache bytes Xb]
         let key = u256_to_bytes(hash);
+        // note: don't remove from txcache until include by block and the block is finalized
+        // note: this means all `not include by any blocks` and `expired` txs remain forever
+        // note: refresh when recreate database
         self.txcache.delete(key.as_ref()).map_err(|err| err.to_string())
     }
 }
