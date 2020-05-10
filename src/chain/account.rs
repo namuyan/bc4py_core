@@ -14,7 +14,7 @@ const BIP32_HARDEN: u32 = 0x80000000;
 
 /// listen account related all address, don't require secret key.
 /// derive `m/44'/CoinType'/account'/is_inner/index` from root_key.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Account {
     pub account_id: u32,      // = AccountBuilder.accounts position
     root_key: ExtendedPubKey, // m/44'/CoinType'/account_id'
@@ -23,6 +23,9 @@ pub struct Account {
     listen_outer: Vec<Address>,
     pub balance: Balances,
     visible: bool,
+
+    // for detect account status change
+    changed: bool,
 }
 
 impl Account {
@@ -40,6 +43,7 @@ impl Account {
                 amount: 0,
             }]),
             visible,
+            changed: true,
         };
 
         // fill
@@ -54,39 +58,80 @@ impl Account {
     }
 
     fn from_bytes(account_id: u32, bytes: &[u8]) -> Result<Self, Error> {
-        // [pk 33b][chain 32b][visible u8][unused_index u32][balance_len u32][coinId u32, amount i64]..
-        let root_key = ExtendedPubKey::deserialize(&bytes[0..33 + 32])?;
-        let visible = 0 < bytes[65];
-        let mut account = Account::new(account_id, visible, root_key)?;
+        // [root_key 33+32b][unused_index u32][inner_len u32][outer_len u32][visible u8]
+        // [balance_len u32][coinId u32, amount i64]..
 
-        // unused_index
-        account.unused_index = bytes_to_u32(&bytes[66..66 + 4]) as usize;
+        // static
+        let root_key = ExtendedPubKey::deserialize(&bytes[0..33 + 32])?;
+        let unused_index = bytes_to_u32(&bytes[65..65 + 4]) as usize;
+        let inner_len = bytes_to_u32(&bytes[69..69 + 4]) as usize;
+        let outer_len = bytes_to_u32(&bytes[73..73 + 4]) as usize;
+        let visible = 0 < bytes[77];
+        let balance_len = bytes_to_u32(&bytes[78..78 + 4]) as usize;
+
+        // listen inner
+        let inner_key = root_key.derive_public_key(KeyIndex::Normal(1))?;
+        let listen_inner: _ = (0..inner_len as u32)
+            .map(|index| {
+                let key = inner_key.derive_public_key(KeyIndex::Normal(index)).unwrap();
+                sha256ripemd160(0, key.public_key.serialize().as_ref())
+            })
+            .collect::<Vec<Address>>();
+
+        // listen outer
+        let outer_key = root_key.derive_public_key(KeyIndex::Normal(0))?;
+        let listen_outer: _ = (0..outer_len as u32)
+            .map(|index| {
+                let key = outer_key.derive_public_key(KeyIndex::Normal(index)).unwrap();
+                sha256ripemd160(0, key.public_key.serialize().as_ref())
+            })
+            .collect::<Vec<Address>>();
 
         // balance
-        let balance_len = bytes_to_u32(&bytes[70..70 + 4]) as usize;
-        account.balance.0.clear();
-        account.balance.0.reserve(balance_len);
-        let mut pos = 74;
-        while pos < bytes.len() {
-            account.balance.0.push(Balance::from_bytes(&bytes[pos..pos + 12]));
+        let mut balance = Balances(Vec::with_capacity(balance_len));
+        let mut pos = 82;
+        for _ in 0..balance_len {
+            let coin_id = bytes_to_u32(&bytes[pos..pos + 4]);
+            let amount = bytes_to_u64(&bytes[pos + 4..pos + 4 + 8]);
             pos += 12;
+            balance.add(coin_id, amount);
         }
 
+        // check
         assert_eq!(pos, bytes.len());
-        Ok(account)
+        Ok(Account {
+            account_id,
+            root_key,
+            unused_index,
+            listen_inner,
+            listen_outer,
+            balance,
+            visible,
+            changed: false,
+        })
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        // [pk 33b][chain 32b][visible u8][unused_index u32][balance_len u32][coinId u32, amount i64]..
-        let mut vec = self.root_key.serialize();
-        vec.reserve(1 + 4 + 4 + self.balance.0.len() * 12);
+        // [root_key 33+32b][unused_index u32][inner_len u32][outer_len u32][visible u8]
+        // [balance_len u32][coinId u32, amount i64]..
+        let mut vec = Vec::with_capacity(33 + 32 + 4 * 3 + 1 + 4);
 
-        vec.push(if self.visible { 1 } else { 0 });
+        // static
+        vec.extend_from_slice(&self.root_key.serialize());
+        assert_eq!(vec.len(), 33 + 32);
         vec.extend_from_slice(&u32_to_bytes(self.unused_index as u32));
+        vec.extend_from_slice(&u32_to_bytes(self.listen_inner.len() as u32));
+        vec.extend_from_slice(&u32_to_bytes(self.listen_outer.len() as u32));
+        vec.push(if self.visible { 1 } else { 0 });
         vec.extend_from_slice(&u32_to_bytes(self.balance.0.len() as u32));
+
+        // balance
+        vec.reserve(self.balance.0.len() * (4 + 8));
         for balance in self.balance.0.iter() {
             balance.to_bytes(&mut vec);
         }
+
+        // success
         vec
     }
 
@@ -101,6 +146,7 @@ impl Account {
                 for index in next_index..(addr_index + PRE_FETCH_ADDR_LEN) {
                     let addr = self.derive_address(true, index as u32)?;
                     self.listen_inner.push(addr);
+                    self.changed = true;
                 }
             }
             // return
@@ -117,6 +163,7 @@ impl Account {
                 for index in next_index..(addr_index + PRE_FETCH_ADDR_LEN) {
                     let addr = self.derive_address(false, index as u32)?;
                     self.listen_outer.push(addr);
+                    self.changed = true;
                 }
             }
             // return
@@ -157,18 +204,18 @@ impl Account {
             Some(balance) => balance.amount += amount,
             None => self.balance.0.push(Balance { coin_id, amount }),
         }
+        self.changed = true;
     }
 
-    fn add_balances_and_update(&mut self, balances: &Balances, cur: &mut TableCursor) {
+    fn add_balances_and_update(&mut self, balances: &Balances) {
         for balance in balances.0.iter() {
             self.add_balance(balance.coin_id, balance.amount);
         }
-        cur.write_account_state(self.account_id, &self.to_bytes())
-            .unwrap();
+        self.changed = true;
     }
 
     pub fn get_new_address(&mut self, new: bool, cur: &mut TableCursor) -> Result<Address, Error> {
-        // return a address generated before but no incoming if `renew` is false
+        // return a address generated before but no incoming if `new` is false
         let index = if new {
             self.unused_index
         } else {
@@ -179,20 +226,24 @@ impl Account {
             }
         };
 
+        // get addr from outer
         match self.listen_outer.get(index) {
             Some(addr) => {
                 let addr = addr.clone();
                 if new {
+                    // new address
                     self.unused_index += 1;
+                    self.expand_outer_size(1).unwrap();
+
+                    // update only this account
                     cur.write_account_state(self.account_id, &self.to_bytes())
                         .unwrap();
-                    self.expand_outer_size(1)?;
                 }
                 Ok(addr)
             },
             None => {
                 // expand `listen_outer` to `unused_index`
-                self.expand_outer_size(PRE_FETCH_ADDR_LEN as u32)?;
+                self.expand_outer_size(PRE_FETCH_ADDR_LEN as u32).unwrap();
                 // retry
                 self.get_new_address(new, cur)
             },
@@ -206,18 +257,18 @@ impl Account {
             let addr = self.derive_address(false, index)?;
             self.listen_outer.push(addr);
         }
+        self.changed = true;
         Ok(())
     }
 
-    fn update_unused_index(&mut self, addr: &Address, cur: &mut TableCursor) {
+    fn update_unused_index(&mut self, addr: &Address) {
         // check incoming address used
         match self.listen_outer.iter().position(|_addr| _addr == addr) {
             Some(addr_index) => {
                 // find incoming on unused_index
                 if self.unused_index <= addr_index {
                     self.unused_index = addr_index + 1;
-                    cur.write_account_state(self.account_id, &self.to_bytes())
-                        .unwrap();
+                    self.changed = true;
                 }
             },
             None => (),
@@ -245,13 +296,15 @@ impl AccountBuilder {
             let key = sk.derive_private_key(key_index)?;
             let root_key = ExtendedPubKey::from_private_key(&key);
             let account = Account::new(account_id, false, root_key)?;
-            cur.write_account_state(account_id, &account.to_bytes()).unwrap();
             accounts.push(account);
         }
-        Ok(AccountBuilder {
+        let mut accounts = AccountBuilder {
             root_key: Some(sk),
             accounts,
-        })
+        };
+        // update accounts
+        accounts.update_all_account_status(cur);
+        Ok(accounts)
     }
 
     pub fn restore_from_tables(tables: &Tables, sk: &Option<Vec<u8>>) -> Result<Self, Error> {
@@ -273,28 +326,34 @@ impl AccountBuilder {
     pub fn get_new_account<'a>(&'a mut self, cur: &mut TableCursor) -> Result<&'a mut Account, String> {
         match self
             .accounts
-            .iter_mut()
+            .iter()
             .position(|_account| _account.visible == false)
         {
             Some(account_id) => {
                 // expand if too few capacity
                 if self.root_key.is_some() && self.accounts.len() < account_id + PRE_FETCH_ACCOUNT_LEN {
-                    self.expand_account_capacity(cur)
-                        .map_err(|err| format!("{:?}", err))?;
+                    self.expand_account_capacity().unwrap();
                 }
-                // set visible account
+
+                // set visible flag to account
                 let account = self.accounts.get_mut(account_id).unwrap();
                 account.visible = true;
+
+                // update one new account
+                cur.write_account_state(account.account_id, &account.to_bytes())
+                    .unwrap();
+
+                // success
                 Ok(account)
             },
             None => {
                 if self.root_key.is_some() {
                     // fill capacity
                     for _ in 0..PRE_FETCH_ACCOUNT_LEN {
-                        self.expand_account_capacity(cur)
-                            .map_err(|err| format!("{:?}", err))?;
+                        self.expand_account_capacity().unwrap();
                     }
                     // retry
+                    // note: accounts update reflect by ok return
                     self.get_new_account(cur)
                 } else {
                     Err("cannot get account because capacity is 0 & root_key is None".to_owned())
@@ -358,7 +417,7 @@ impl AccountBuilder {
             let addr = &inputs_cache.0;
             for account in self.accounts.iter_mut() {
                 if account.check_and_expand_listen(addr)?.is_some() {
-                    account.update_unused_index(addr, cur);
+                    account.update_unused_index(addr);
                     movement.push_outgoing(inputs_cache.1, inputs_cache.2);
                     break;
                 }
@@ -371,7 +430,7 @@ impl AccountBuilder {
             for account in self.accounts.iter_mut() {
                 match account.check_and_expand_listen(addr)? {
                     Some(is_inner) => {
-                        account.update_unused_index(addr, cur);
+                        account.update_unused_index(addr);
                         movement.push_incoming(account.account_id, output.1, output.2, is_inner);
                         break;
                     },
@@ -385,6 +444,11 @@ impl AccountBuilder {
         if movement.get_movement_type() != MovementType::Nothing {
             cur.write_temporary_movement(&movement).unwrap();
         }
+
+        // update accounts
+        self.update_all_account_status(cur);
+
+        // success
         Ok(())
     }
 
@@ -399,7 +463,7 @@ impl AccountBuilder {
                         self.accounts
                             .get_mut(account_id as usize)
                             .expect("already known account but?")
-                            .add_balances_and_update(&balances, cur);
+                            .add_balances_and_update(&balances);
                     }
                 },
                 None => continue, // skip next update because no account tx
@@ -409,6 +473,10 @@ impl AccountBuilder {
             cur.update_movement_status(hash, block.height, position as u32)?;
         }
 
+        // update accounts
+        self.update_all_account_status(cur);
+
+        // success
         Ok(())
     }
 
@@ -429,7 +497,7 @@ impl AccountBuilder {
         }
     }
 
-    fn expand_account_capacity(&mut self, cur: &mut TableCursor) -> Result<(), Error> {
+    fn expand_account_capacity(&mut self) -> Result<(), Error> {
         // add a invisible account for listen
         assert!(self.root_key.is_some());
         let last = self.accounts.last().unwrap();
@@ -440,11 +508,22 @@ impl AccountBuilder {
             .unwrap()
             .derive_private_key(KeyIndex::Hardened(BIP32_HARDEN + account_id))?;
         let root_key = ExtendedPubKey::from_private_key(&key);
+        // note: new account isn't updated yet
         let new_account = Account::new(account_id, false, root_key)?;
-        cur.write_account_state(account_id, &new_account.to_bytes())
-            .unwrap();
         self.accounts.push(new_account);
         Ok(())
+    }
+
+    fn update_all_account_status(&mut self, cur: &mut TableCursor) {
+        // refract status to tables at once
+        // execute after account edit
+        for account in self.accounts.iter_mut() {
+            if account.changed {
+                cur.write_account_state(account.account_id, &account.to_bytes())
+                    .unwrap();
+                account.changed = false;
+            }
+        }
     }
 }
 
@@ -504,9 +583,6 @@ mod account {
 
         let bytes = account.to_bytes();
         let new_account = Account::from_bytes(account_id, &bytes).unwrap();
-        assert_eq!(new_account.root_key, account.root_key);
-        assert_eq!(new_account.unused_index, account.unused_index);
-        assert_eq!(new_account.visible, account.visible);
-        assert_eq!(new_account.balance, account.balance);
+        assert_eq!(new_account, account);
     }
 }
