@@ -581,6 +581,9 @@ mod account {
         account.add_balance(1, 300);
         account.unused_index = 3;
 
+        // no recode
+        account.changed = false;
+
         let bytes = account.to_bytes();
         let new_account = Account::from_bytes(account_id, &bytes).unwrap();
         assert_eq!(new_account, account);

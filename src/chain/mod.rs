@@ -19,13 +19,13 @@ use crate::tx::{TxInput, TxOutput, TxRecoded, TxVerifiable};
 use bigint::U256;
 use std::path::Path;
 
-/// unconfirmed -> confirmed -> tables
-
-/// genesis block's previous_hash is "ffff..ffff"
-const GENESIS_PREVIOUS_HASH: [u8; 32] = [
-    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-];
+lazy_static! {
+    // genesis block's previous_hash is "ffff..ffff"
+    static ref GENESIS_PREVIOUS_HASH: U256 = U256::from([
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ].as_ref());
+}
 type Address = [u8; 21];
 
 pub struct Chain {
@@ -55,7 +55,7 @@ impl Chain {
 
         // confirmed
         let confirmed = if tables.initialized {
-            let root_hash = U256::from(GENESIS_PREVIOUS_HASH.as_ref());
+            let root_hash: U256 = *GENESIS_PREVIOUS_HASH;
             ConfirmedBuilder::new(dir, &root_hash)
         } else {
             ConfirmedBuilder::restore_from_file(&tables)?

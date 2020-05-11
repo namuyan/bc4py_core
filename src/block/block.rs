@@ -1,5 +1,7 @@
+use crate::block::*;
 use crate::utils::*;
 use bigint::U256;
+use std::fmt;
 
 #[derive(Clone, PartialEq)]
 pub struct BlockHeader {
@@ -12,7 +14,6 @@ pub struct BlockHeader {
 }
 
 impl BlockHeader {
-    /// get block header from bytes
     pub fn from_bytes(bytes: &[u8]) -> BlockHeader {
         assert_eq!(bytes.len(), 80);
         let version = bytes_to_u32(&bytes[0..4]);
@@ -31,7 +32,6 @@ impl BlockHeader {
         }
     }
 
-    /// to bytes
     pub fn to_bytes(&self) -> [u8; 80] {
         let mut data = [0u8; 80];
         write_slice(&mut data[0..4], &u32_to_bytes(self.version));
@@ -43,13 +43,12 @@ impl BlockHeader {
         data
     }
 
-    /// get sha256d hash
     pub fn hash(&self) -> U256 {
         U256::from(sha256double(&self.to_bytes()).as_slice())
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
 pub enum BlockFlag {
     Genesis, // genesis tx
     CoinPos, // coin stake
@@ -101,19 +100,12 @@ pub struct Block {
     pub txs_hash: Vec<U256>,
 }
 
-impl std::fmt::Debug for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hash = hex::encode(sha256double(&self.header.to_bytes()));
         f.debug_tuple("Block").field(&hash).finish()
     }
 }
-
-// for target (BASE = MAX / 0x100000000)
-// base = 0x00000000ffff0000000000000000000000000000000000000000000000000000
-// bax  = 0xffff000000000000000000000000000000000000000000000000000000000000
-static MAX_TARGET: [u8; 32] = [
-    255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-];
 
 impl Block {
     pub fn new(
@@ -145,71 +137,5 @@ impl Block {
         let difficulty = target_to_diff(target);
         // score = difficulty / bias
         difficulty / (self.bias as f64)
-    }
-}
-
-/// calculate target from bits
-pub fn bits_to_target(bits: u32) -> Result<U256, String> {
-    let exponent = (bits >> 24) & 0xff;
-    if exponent < 3 || 33 < exponent {
-        return Err(format!("'3 <= exponent <= 33' but {}", exponent));
-    }
-    let mantissa = U256::from(bits & 0x7fffff);
-    let exponent = U256::from(256).pow(U256::from(exponent - 3));
-    Ok(mantissa * exponent)
-}
-
-/// calculate bits from target
-pub fn target_to_bits(target: &U256) -> u32 {
-    let mut target = target.clone();
-    let limit = U256::from(0x7fffff);
-    let mut exponent: u32 = 3;
-    let base = U256::from(256);
-    while limit < target {
-        target = target / base;
-        exponent += 1;
-    }
-    (exponent << 24) | (target.0[0] as u32)
-}
-
-/// calculate difficulty from target
-pub fn target_to_diff(target: U256) -> f64 {
-    let max = U256::from(MAX_TARGET.as_ref());
-    ((max / target).as_u64() as f64) / 4294967296f64
-}
-
-#[allow(unused_imports)]
-#[cfg(test)]
-mod target_bits {
-    use crate::block::*;
-    use crate::utils::*;
-    use bigint::U256;
-
-    #[test]
-    fn decode_encode() {
-        // https://btc.com/000000000000034a7dedef4a161fa058a2d67a173a90155f3a2fe6fc132e0ebf
-        let bits: u32 = 0x1a05db8b;
-        let target = bits_to_target(bits).unwrap();
-        assert_eq!(bits, target_to_bits(&target));
-
-        let work_hash =
-            hex::decode("000000000000034a7dedef4a161fa058a2d67a173a90155f3a2fe6fc132e0ebf").unwrap();
-        let work = U256::from(work_hash.as_slice());
-        assert!(target > work);
-    }
-
-    #[test]
-    fn range() {
-        let target = "ffff000000000000000000000000000000000000000000000000000000000000";
-        let bits = target_to_bits(&string_to_u256(target));
-        assert_eq!(bits, 0x2100ffff);
-        let _target = bits_to_target(bits).unwrap();
-        assert_eq!(target, &hex::encode(u256_to_bytes(&_target)));
-
-        let target = "0000000000000000000000000000000000000000000000000000000000000000";
-        let bits = target_to_bits(&string_to_u256(target));
-        assert_eq!(bits, 0x03000000);
-        let _target = bits_to_target(bits).unwrap();
-        assert_eq!(target, &hex::encode(u256_to_bytes(&_target)));
     }
 }
