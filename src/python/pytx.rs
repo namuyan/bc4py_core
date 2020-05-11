@@ -2,7 +2,6 @@ use crate::python::pyaddr::PyAddress;
 use crate::python::pychain::PyChain;
 use crate::python::pysigature::PySignature;
 use crate::python::pyunspent::PyUnspent;
-use crate::python::utils::params2bech;
 use crate::signature::signature_to_bytes;
 use crate::tx::*;
 use crate::utils::*;

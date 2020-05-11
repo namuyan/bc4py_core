@@ -102,8 +102,17 @@ pub struct Block {
 
 impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hash = hex::encode(sha256double(&self.header.to_bytes()));
-        f.debug_tuple("Block").field(&hash).finish()
+        f.debug_map()
+            .entry(&"hash", &u256_to_hex(&self.header.hash()))
+            .entry(&"work", &u256_to_hex(&self.work_hash))
+            .entry(&"height", &self.height)
+            .entry(&"flag", &self.flag)
+            .entry(&"bias", &self.bias)
+            .entry(
+                &"txs",
+                &self.txs_hash.iter().map(u256_to_hex).collect::<Vec<String>>(),
+            )
+            .finish()
     }
 }
 

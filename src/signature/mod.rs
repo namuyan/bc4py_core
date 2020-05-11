@@ -1,5 +1,5 @@
 use crate::signature::utils::*;
-use std::fmt::Formatter;
+use std::fmt;
 
 mod aggregate;
 mod threshold;
@@ -16,8 +16,8 @@ pub enum Signature {
     ThresholdSig((POINT, POINT, SCALAR)),  // (Y, V, sigma)
 }
 
-impl std::fmt::Debug for Signature {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Signature::SingleSig((pk, _, _)) => {
                 f.debug_tuple("Single").field(&hex::encode(&pk[1..33])).finish()

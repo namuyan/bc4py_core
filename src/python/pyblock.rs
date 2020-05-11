@@ -8,6 +8,7 @@ use pyo3::exceptions::ValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use pyo3::PyObjectProtocol;
+use std::fmt;
 
 #[pyclass]
 pub struct PyBlock {
@@ -350,8 +351,8 @@ impl PyBlock {
     }
 }
 
-impl std::fmt::Debug for PyBlock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PyBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hash = hex::encode(&sha256double(&self.header.to_bytes()));
         f.debug_tuple("PyBlock")
             .field(&self.height)

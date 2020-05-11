@@ -5,6 +5,7 @@ use crate::tx::{TxInput, TxOutput, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 use bloomfilter::Bloom;
+use std::fmt;
 
 type Address = [u8; 21];
 const FP_P: f64 = 0.01; // false-positive rate
@@ -20,8 +21,8 @@ struct Unconfirmed {
     size: u32,
 }
 
-impl std::fmt::Debug for Unconfirmed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Unconfirmed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("unconfirmed")
             .field(&hex::encode(u256_to_bytes(&self.hash)))
             .finish()

@@ -5,6 +5,7 @@ use crate::tx::TxVerifiable;
 use crate::utils::*;
 use hdwallet::traits::{Deserialize, Serialize};
 use hdwallet::{error::Error, ExtendedPrivKey, ExtendedPubKey, KeyIndex};
+use std::fmt;
 use std::slice::Iter;
 
 type Address = [u8; 21];
@@ -14,7 +15,7 @@ const BIP32_HARDEN: u32 = 0x80000000;
 
 /// listen account related all address, don't require secret key.
 /// derive `m/44'/CoinType'/account'/is_inner/index` from root_key.
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct Account {
     pub account_id: u32,      // = AccountBuilder.accounts position
     root_key: ExtendedPubKey, // m/44'/CoinType'/account_id'
@@ -26,6 +27,21 @@ pub struct Account {
 
     // for detect account status change
     changed: bool,
+}
+
+impl fmt::Debug for Account {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entry(&"id", &self.account_id)
+            .entry(&"key", &hex::encode(self.root_key.serialize()))
+            .entry(&"unused", &self.unused_index)
+            .entry(&"inner", &self.listen_inner.len())
+            .entry(&"outer", &self.listen_outer.len())
+            .entry(&"balance", &self.balance)
+            .entry(&"visible", &self.visible)
+            .entry(&"changed", &self.changed)
+            .finish()
+    }
 }
 
 impl Account {

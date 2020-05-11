@@ -1,11 +1,28 @@
 use crate::signature::*;
+use pyo3::basic::CompareOp;
 use pyo3::exceptions::ValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
+use pyo3::PyObjectProtocol;
 
 #[pyclass]
 pub struct PySignature {
     pub signs: Vec<Signature>,
+}
+
+#[pyproto]
+impl PyObjectProtocol for PySignature {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("{:?}", self.signs))
+    }
+
+    fn __richcmp__(&self, other: PyRef<'p, Self>, op: CompareOp) -> PyResult<bool> {
+        match op {
+            CompareOp::Eq => Ok(self.signs == other.signs), // `__eq__`
+            CompareOp::Ne => Ok(self.signs != other.signs), // `__ne__`
+            _ => Err(ValueError::py_err("not implemented")),
+        }
+    }
 }
 
 #[pymethods]

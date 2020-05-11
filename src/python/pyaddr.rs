@@ -1,4 +1,4 @@
-use crate::python::utils::*;
+use crate::tx::{params2bech, string2addr};
 use crate::utils::write_slice;
 use pyo3::basic::CompareOp;
 use pyo3::exceptions::ValueError;
@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyType};
 use pyo3::PyObjectProtocol;
 use std::collections::hash_map::DefaultHasher;
+use std::fmt;
 use std::hash::Hasher;
 
 type Address = [u8; 21];
@@ -98,8 +99,8 @@ impl PyAddress {
     }
 }
 
-impl std::fmt::Debug for PyAddress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PyAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_string().unwrap())
     }
 }

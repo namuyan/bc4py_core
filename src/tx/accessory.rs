@@ -1,6 +1,7 @@
-use crate::tx::{TxBody, TxRecoded, TxVerifiable};
+use crate::tx::{params2bech, TxBody, TxRecoded, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
+use std::fmt;
 use streaming_iterator::StreamingIterator;
 
 type Address = [u8; 21];
@@ -8,11 +9,13 @@ type Address = [u8; 21];
 #[derive(Clone, PartialEq)]
 pub struct TxInput(pub U256, pub u8); // (txhash, txindex)
 
-impl std::fmt::Debug for TxInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // input(txhash, txindex)
-        let hash = hex::encode(u256_to_bytes(&self.0).as_ref());
-        f.debug_tuple("input").field(&hash).field(&self.1).finish()
+impl fmt::Debug for TxInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // [txhash, txindex]
+        f.debug_list()
+            .entry(&u256_to_hex(&self.0))
+            .entry(&self.1)
+            .finish()
     }
 }
 
@@ -35,8 +38,20 @@ impl TxInput {
 }
 
 /// (address<ver+ripemd160>, coinId, amount)
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub struct TxOutput(pub Address, pub u32, pub u64);
+
+impl fmt::Debug for TxOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // [addr, coinId, amount]
+        let bech = params2bech(self.0[0], &self.0[1..21]).unwrap();
+        f.debug_list()
+            .entry(&bech.to_string())
+            .entry(&self.1)
+            .entry(&self.2)
+            .finish()
+    }
+}
 
 impl TxOutput {
     #[inline]
@@ -99,13 +114,19 @@ impl TxType {
 
 /// transaction message format
 /// https://github.com/kumacoinproject/bc4py/blob/develop/bc4py/config.py#L59
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub enum TxMessage {
     Nothing,
     Plain(String),
     Byte(Vec<u8>),
     // MsgPack(Vec<u8>),
     // HashLocked(Vec<u8>),
+}
+
+impl fmt::Debug for TxMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple(self.to_type()).field(&self.to_string()).finish()
+    }
 }
 
 impl TxMessage {
@@ -169,8 +190,20 @@ impl TxMessage {
 }
 
 /// Block's static transactions `(coinbase, txs, iter_index)`
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub struct BlockTxs(pub TxVerifiable, pub Vec<TxRecoded>);
+
+impl fmt::Debug for BlockTxs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut s = String::with_capacity(self.len() * (32 + 2));
+        s.extend(u256_to_hex(&self.0.hash).chars());
+        for tx in self.1.iter() {
+            s.extend(", ".chars());
+            s.extend(u256_to_hex(&tx.hash).chars());
+        }
+        f.debug_list().entry(&s).finish()
+    }
+}
 
 impl BlockTxs {
     pub fn new(coinbase: TxVerifiable, txs: Vec<TxRecoded>) -> Self {

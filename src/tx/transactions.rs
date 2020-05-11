@@ -22,8 +22,16 @@ pub struct TxBody {
 
 impl fmt::Debug for TxBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hash = hex::encode(sha256double(&self.to_bytes()));
-        f.debug_tuple("TxBody").field(&hash).finish()
+        f.debug_tuple("body")
+            .field(&self.version)
+            .field(&self.txtype)
+            .field(&self.time)
+            .field(&self.inputs)
+            .field(&self.outputs)
+            .field(&self.gas_price)
+            .field(&self.gas_amount)
+            .field(&self.message)
+            .finish()
     }
 }
 
@@ -165,11 +173,22 @@ impl TxBody {
 }
 
 /// from tables **read-only**
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub struct TxRecoded {
     pub hash: U256,
     pub body: TxBody,
     pub signature: Vec<Signature>,
+}
+
+impl fmt::Debug for TxRecoded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entry(&"type", &"recoded")
+            .entry(&"hash", &u256_to_hex(&self.hash))
+            .entry(&"body", &self.body)
+            .entry(&"sign", &self.signature)
+            .finish()
+    }
 }
 
 impl TxRecoded {
@@ -208,12 +227,24 @@ impl TxRecoded {
 
 /// **read-only**
 /// form tables (coinbase) and from txcache (normal)
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub struct TxVerifiable {
     pub hash: U256,
     pub body: TxBody,
     pub signature: Vec<Signature>,
     pub inputs_cache: Vec<TxOutput>,
+}
+
+impl fmt::Debug for TxVerifiable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entry(&"type", &"verifiable")
+            .entry(&"hash", &u256_to_hex(&self.hash))
+            .entry(&"body", &self.body)
+            .entry(&"sign", &self.signature)
+            .entry(&"inputs_cache", &self.inputs_cache)
+            .finish()
+    }
 }
 
 impl TxVerifiable {
@@ -243,11 +274,23 @@ impl TxVerifiable {
 }
 
 /// manually generated to convert to `TxVerifiable`
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq)]
 pub struct TxManual {
     pub body: TxBody,
     pub signature: Option<Vec<Signature>>,
     pub inputs_cache: Option<Vec<TxOutput>>,
+}
+
+impl fmt::Debug for TxManual {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entry(&"type", &"manual")
+            .entry(&"hash", &hex::encode(&self.body.hash()))
+            .entry(&"body", &self.body)
+            .entry(&"sign", &self.signature)
+            .entry(&"inputs_cache", &self.inputs_cache)
+            .finish()
+    }
 }
 
 impl TxManual {
@@ -322,7 +365,6 @@ impl TxManual {
 #[allow(unused_imports)]
 #[cfg(test)]
 mod tx {
-    use crate::python::utils::{set_global_hrp, string2addr};
     use crate::signature::Signature;
     use crate::tx::*;
     use crate::utils::*;
