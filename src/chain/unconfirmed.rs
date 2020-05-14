@@ -6,6 +6,7 @@ use crate::utils::*;
 use bigint::U256;
 use bloomfilter::Bloom;
 use std::fmt;
+use streaming_iterator::{DoubleEndedStreamingIterator, StreamingIterator};
 
 type Address = [u8; 21];
 const FP_P: f64 = 0.01; // false-positive rate
@@ -29,16 +30,215 @@ impl fmt::Debug for Unconfirmed {
     }
 }
 
+type TxsType = Vec<Option<Unconfirmed>>;
+
+/// unconfirmed transaction's list
+#[derive(Debug)]
+struct Txs(TxsType);
+
+/// unconfirmed txs iter
+struct TxsIter<'a> {
+    index: Option<usize>,
+    vec: &'a TxsType,
+}
+
+impl StreamingIterator for TxsIter<'_> {
+    type Item = Unconfirmed;
+
+    fn advance(&mut self) {
+        loop {
+            // init
+            if self.index.is_none() {
+                self.index.replace(0);
+            } else {
+                *self.index.as_mut().unwrap() += 1;
+            }
+            // vec = [0,1,2,3,4]
+            // false: index=5 < len=5
+            let index = self.index.unwrap();
+            if self.vec.get(index).is_some() {
+                break; // find element
+            } else if index < self.vec.len() {
+                continue; // deleted element
+            } else {
+                self.index.take();
+                break; // end of iter
+            }
+        }
+    }
+
+    fn get(&self) -> Option<&Self::Item> {
+        match self.index {
+            Some(index) => Some(self.vec.get(index).unwrap().as_ref().unwrap()),
+            None => None,
+        }
+    }
+}
+
+impl DoubleEndedStreamingIterator for TxsIter<'_> {
+    fn advance_back(&mut self) {
+        loop {
+            // init
+            if self.index.is_none() {
+                if 0 < self.vec.len() {
+                    self.index.replace(self.vec.len() - 1);
+                } else {
+                    break; // empty vec
+                }
+            } else {
+                *self.index.as_mut().unwrap() -= 1;
+            }
+            // vec = [0,1,2,3,4]
+            // false: index=5 < len=5
+            let index = self.index.unwrap();
+            if self.vec.get(index).is_some() {
+                break; // find element
+            } else if index < self.vec.len() {
+                continue; // deleted element
+            } else {
+                self.index.take();
+                break; // end of iter
+            }
+        }
+    }
+}
+
+/// unconfirmed is sorted by priority high to low
 #[derive(Debug)]
 pub struct UnconfirmedBuilder {
-    // unconfirmed is sorted by priority high to low
-    unconfirmed: Vec<Unconfirmed>,
+    txs: Txs,
+}
+
+impl Txs {
+    /// check exist the hash
+    fn exist(&self, hash: &U256) -> bool {
+        self.0
+            .iter()
+            .find(|tx| tx.is_some() && &tx.as_ref().unwrap().hash == hash)
+            .is_some()
+    }
+
+    /// get tx's position on unconfirmed
+    fn position(&self, hash: &U256) -> Option<usize> {
+        self.0
+            .iter()
+            .filter(|tx| tx.is_some())
+            .position(|tx| &tx.as_ref().unwrap().hash == hash)
+    }
+
+    /// remove tx or panic!
+    fn remove(&mut self, index: usize) -> Unconfirmed {
+        self.0
+            .iter_mut()
+            .filter(|tx| tx.is_some())
+            .nth(index)
+            .take()
+            .expect("index is out of bounds")
+            .take()
+            .expect("item is none but filtered?")
+    }
+
+    /// push an element to the back
+    fn push(&mut self, value: Unconfirmed) {
+        // note: rare case
+        self.0.push(Some(value));
+    }
+
+    /// insert a item before the index specified
+    fn insert(&mut self, index: usize, element: Unconfirmed) {
+        // get raw_index on txs
+        let raw_index = match self.0.iter().filter(|tx| tx.is_some()).nth(index) {
+            // note: item is some type
+            Some(item) => self.position(&item.as_ref().unwrap().hash).unwrap(),
+            None => {
+                if 0 < index {
+                    panic!("index is out of bounds");
+                } else {
+                    // vec is empty
+                    self.0.push(Some(element));
+                    return;
+                }
+            },
+        };
+
+        // check index-1 is none and replace
+        if 0 < raw_index {
+            let item = self.0.get_mut(raw_index - 1).unwrap();
+            if item.is_none() {
+                item.replace(element);
+                return;
+            }
+        }
+
+        // check index-2 is none and replace
+        if 1 < raw_index {
+            let back_index = raw_index - 2;
+            if self.0.get(back_index).unwrap().is_none() {
+                self.0.get_mut(back_index).unwrap().replace(element);
+                self.0.swap(back_index, raw_index - 1);
+                return;
+            }
+        }
+
+        // check index+1 is none and replace
+        if raw_index + 1 < self.0.len() {
+            let next_index = raw_index + 1;
+            if self.0.get(next_index).unwrap().is_none() {
+                self.0.get_mut(next_index).unwrap().replace(element);
+                self.0.swap(raw_index, next_index);
+                return;
+            }
+        }
+
+        // not found empty item near and insert
+        self.0.insert(raw_index, Some(element));
+    }
+
+    /// compact empty space of vec
+    #[allow(dead_code)]
+    fn compaction(&mut self) {
+        // note: best empty space is same size of filled size
+        let mut reserve_num = self.len() as i32;
+        // note: beginning part should have empty space because of often edit and high cost to insert
+        self.0
+            .drain_filter(|tx| {
+                // drop if return true
+                if tx.is_none() {
+                    reserve_num -= 1;
+                    reserve_num < 0
+                } else {
+                    false
+                }
+            })
+            .for_each(drop);
+        // release memory
+        self.0.shrink_to_fit();
+    }
+
+    /// total unconfirmed txs number
+    fn len(&self) -> usize {
+        self.0.iter().filter(|tx| tx.is_some()).count()
+    }
+
+    /// size hint (minimum, maximum)
+    #[allow(dead_code)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.0.len()))
+    }
+
+    /// iterate unconfirmed txs
+    fn streaming(&self) -> TxsIter {
+        TxsIter {
+            index: None,
+            vec: &self.0,
+        }
+    }
 }
 
 impl UnconfirmedBuilder {
     pub fn new() -> Self {
         UnconfirmedBuilder {
-            unconfirmed: Vec::with_capacity(100),
+            txs: Txs(Vec::with_capacity(100)),
         }
     }
 
@@ -63,20 +263,20 @@ impl UnconfirmedBuilder {
     }
 
     pub fn have_the_tx(&self, hash: &U256) -> bool {
-        self.unconfirmed.iter().position(|tx| &tx.hash == hash).is_some()
-    }
-
-    pub fn get_priority(&self, hash: &U256) -> Option<usize> {
-        self.unconfirmed.iter().position(|tx| &tx.hash == hash)
+        self.txs.exist(hash)
     }
 
     pub fn get_size(&self) -> u32 {
-        self.unconfirmed.iter().map(|tx| tx.size).sum()
+        let mut size = 0;
+        while let Some(unconfirmed) = self.txs.streaming().next() {
+            size += unconfirmed.size;
+        }
+        size
     }
 
     pub fn input_already_used(&self, input: &TxInput, tables: &Tables) -> Result<bool, String> {
         let hash = &input.0;
-        for unconfirmed in self.unconfirmed.iter() {
+        while let Some(unconfirmed) = self.txs.streaming().next() {
             if unconfirmed.depend_hashs.contains(hash) {
                 let tx = tables
                     .read_txcache(&unconfirmed.hash)?
@@ -182,7 +382,7 @@ impl UnconfirmedBuilder {
         // find all same input use txs
         let mut hashs = Vec::new();
         for input in inputs.iter() {
-            for unconfirmed in self.unconfirmed.iter() {
+            while let Some(unconfirmed) = self.txs.streaming().next() {
                 if unconfirmed.depend_hashs.contains(&input.0) {
                     let tx = tables.read_txcache(&unconfirmed.hash)?.unwrap();
                     if tx.body.inputs.contains(input) {
@@ -198,40 +398,42 @@ impl UnconfirmedBuilder {
         Ok(())
     }
 
-    pub fn get_size_limit_list(&self, maxsize: u32, deadline: u32) -> Vec<U256> {
+    pub fn get_size_limit_list(&self, maxsize: u32) -> Vec<U256> {
         // size limit unconfirmed tx's tuple for mining interface
+        // note: drain by deadline before call this method
         let mut size = 0;
-        self.unconfirmed
-            .iter()
-            .filter(|tx| deadline < tx.deadline)
-            .filter(|tx| {
-                size += tx.size;
-                size < maxsize
-            })
-            .map(|tx| tx.hash)
-            .collect::<Vec<U256>>()
+        let mut vec = Vec::with_capacity(3000);
+        while let Some(unconfirmed) = self.txs.streaming().next() {
+            size += unconfirmed.size;
+            if size < maxsize {
+                vec.push(unconfirmed.hash.clone());
+            } else {
+                break;
+            }
+        }
+        vec.shrink_to_fit();
+        vec
     }
 
     pub fn filtered_unconfirmed_iter(&self, filter: Option<Address>) -> UnconfirmedIter {
         // note: filter by address but optional
         UnconfirmedIter {
-            unconfirmed: self,
+            txs_iter: self.txs.streaming(),
             filter,
-            index: 0,
         }
     }
 
     pub fn remove_expired_txs(&mut self, deadline: u32) -> Vec<U256> {
         // remove expired unconfirmed txs
-        // note: remove from this and tables
+        // note: remove from this but not remove from tables
         let mut deleted: Vec<Unconfirmed> = Vec::new();
 
         // remove from unconfirmed
         loop {
             let mut want_delete = None;
-            for tx in self.unconfirmed.iter() {
-                if tx.deadline < deadline {
-                    want_delete = Some(tx.hash.clone());
+            while let Some(unconfirmed) = self.txs.streaming().next() {
+                if unconfirmed.deadline < deadline {
+                    want_delete = Some(unconfirmed.hash.clone());
                     break;
                 }
             }
@@ -252,7 +454,7 @@ impl UnconfirmedBuilder {
         ignore: bool,
         tables: &Tables,
     ) -> Result<(), String> {
-        for unconfirmed in self.unconfirmed.iter() {
+        while let Some(unconfirmed) = self.txs.streaming().next() {
             if ignore && output.is_some() {
                 return Ok(());
             }
@@ -283,18 +485,19 @@ impl UnconfirmedBuilder {
     /// remove unconfirmed tx with depend it
     fn remove_with_depend_myself(&mut self, hash: &U256, deleted: &mut Vec<Unconfirmed>) {
         // find position
-        let delete_index = match self.unconfirmed.iter().position(|tx| hash == &tx.hash) {
+        let delete_index = match self.txs.position(hash) {
             Some(index) => index,
             None => return,
         };
 
         // delete tx
-        deleted.push(self.unconfirmed.remove(delete_index));
+        deleted.push(self.txs.remove(delete_index));
 
         // check depend_hashs
         loop {
             let mut delete_hash = None;
-            for tx in self.unconfirmed.iter() {
+
+            while let Some(tx) = self.txs.streaming().next() {
                 if tx.depend_hashs.contains(hash) {
                     delete_hash = Some(tx.hash.clone());
                     break;
@@ -312,8 +515,9 @@ impl UnconfirmedBuilder {
     fn push_unconfirmed(&mut self, unconfirmed: Unconfirmed) -> Result<usize, String> {
         // most high position depend index
         let mut depend_index: Option<usize> = None;
-        for (index, tx) in self.unconfirmed.iter().enumerate() {
+        while let Some(tx) = self.txs.streaming().next() {
             if unconfirmed.depend_hashs.contains(&tx.hash) {
+                let index = self.txs.position(&tx.hash).unwrap();
                 depend_index = Some(index);
             }
             if unconfirmed.hash == tx.hash {
@@ -324,8 +528,9 @@ impl UnconfirmedBuilder {
         // most low position required index
         let mut required_index = None;
         let mut disturbs = Vec::new();
-        for (index, tx) in self.unconfirmed.iter().enumerate().rev() {
+        while let Some(tx) = self.txs.streaming().rev().next() {
             if tx.depend_hashs.contains(&unconfirmed.hash) {
+                let index = self.txs.position(&tx.hash).unwrap();
                 required_index = Some(index);
                 // check absolute condition: depend_index < required_index
                 if depend_index.is_some() && depend_index.unwrap() >= index {
@@ -352,14 +557,15 @@ impl UnconfirmedBuilder {
             }
 
             // 4. find original position
-            let position = self.unconfirmed.iter().position(|tx| hash == tx.hash);
+            let position = self.txs.position(&hash);
             return Ok(position.unwrap());
         }
 
         // normal: without disturbs
         // find best relative condition
         let mut best_index: Option<usize> = None;
-        for (index, tx) in self.unconfirmed.iter().enumerate() {
+        while let Some(tx) = self.txs.streaming().next() {
+            let index = self.txs.position(&tx.hash).unwrap();
             // absolute conditions
             // ex
             //        0 1 2 3 4 5
@@ -397,13 +603,13 @@ impl UnconfirmedBuilder {
         match best_index {
             Some(best_index) => {
                 // println!("best {} {:?} {:?}", best_index, depend_index, required_index);
-                self.unconfirmed.insert(best_index, unconfirmed);
+                self.txs.insert(best_index, unconfirmed);
                 Ok(best_index)
             },
             None => {
                 // println!("last {:?} {:?}", depend_index, required_index);
-                self.unconfirmed.push(unconfirmed);
-                Ok(self.unconfirmed.len())
+                self.txs.push(unconfirmed);
+                Ok(self.txs.len() - 1)
             },
         }
     }
@@ -411,9 +617,8 @@ impl UnconfirmedBuilder {
 
 /// iterate unconfirmed txhash from priority high to low
 pub struct UnconfirmedIter<'a> {
-    unconfirmed: &'a UnconfirmedBuilder,
+    txs_iter: TxsIter<'a>,
     filter: Option<Address>,
-    index: usize,
 }
 
 impl Iterator for UnconfirmedIter<'_> {
@@ -421,13 +626,15 @@ impl Iterator for UnconfirmedIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.unconfirmed.unconfirmed.get(self.index) {
+            match self.txs_iter.next() {
                 Some(unconfirmed) => {
-                    self.index += 1;
                     if self.filter.is_some() {
                         if unconfirmed.depend_addrs.check(self.filter.as_ref().unwrap()) {
                             // maybe the unconfirmed is related..
                             return Some(unconfirmed.hash);
+                        } else {
+                            // don't include the address
+                            continue;
                         }
                     } else {
                         return Some(unconfirmed.hash);
