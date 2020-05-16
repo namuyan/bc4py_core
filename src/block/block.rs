@@ -13,6 +13,20 @@ pub struct BlockHeader {
     pub nonce: u32,          // 4bytes int
 }
 
+impl fmt::Debug for BlockHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entry(&"hash", &u256_to_hex(&self.hash()))
+            .entry(&"version", &self.version)
+            .entry(&"previous", &u256_to_hex(&self.previous_hash))
+            .entry(&"merkleroot", &u256_to_hex(&self.merkleroot))
+            .entry(&"time", &self.time)
+            .entry(&"bits", &self.bits)
+            .entry(&"nonce", &self.nonce)
+            .finish()
+    }
+}
+
 impl BlockHeader {
     pub fn from_bytes(bytes: &[u8]) -> BlockHeader {
         assert_eq!(bytes.len(), 80);
@@ -103,7 +117,7 @@ pub struct Block {
 impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
-            .entry(&"hash", &u256_to_hex(&self.header.hash()))
+            .entry(&"header", &self.header)
             .entry(&"work", &u256_to_hex(&self.work_hash))
             .entry(&"height", &self.height)
             .entry(&"flag", &self.flag)

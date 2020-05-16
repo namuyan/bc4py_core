@@ -1,5 +1,4 @@
 use crate::balance::*;
-use crate::block::Block;
 use crate::chain::Chain;
 use crate::python::pyunspent::PyUnspent;
 use crate::python::{pyaccount::*, pyaddr::PyAddress, pyblock::PyBlock, pytx::PyTx};
@@ -47,19 +46,14 @@ impl PyChain {
         }
     }
 
-    fn push_new_block(&self, py: Python, block: PyRef<PyBlock>, txs: Vec<PyRef<PyTx>>) -> PyResult<()> {
+    fn push_new_block(&self, py: Python, block: PyRef<PyBlock>) -> PyResult<()> {
         let mut chain = self.lock();
         if chain.tables.is_closed {
             return Err(ValueError::py_err("already closed!"));
         }
-        let block: Block = block.clone_to_block().map_err(|_err| TypeError::py_err(_err))?;
-        let txs = {
-            let mut _txs = Vec::with_capacity(block.txs_hash.len());
-            for tx in txs.iter() {
-                _txs.push(tx.clone_to_verifiable(py)?)
-            }
-            _txs
-        };
+
+        // check PyBlock is verifiable to insert chain
+        let (block, txs) = block.clone_to_full_block(py)?;
 
         // note: push txs to unconfirmed before
         // warning: error means tables is broken, do not allow this error
@@ -82,7 +76,7 @@ impl PyChain {
             .map_err(|_err| ValueError::py_err(format!("push unconfirmed failed: {}", _err)))
     }
 
-    fn get_block(&self, hash: &PyBytes) -> PyResult<Option<PyBlock>> {
+    fn get_block(&self, py: Python, hash: &PyBytes) -> PyResult<Option<PyBlock>> {
         let chain = self.lock();
         let hash = hash.as_bytes();
         if hash.len() != 32 {
@@ -92,7 +86,26 @@ impl PyChain {
             .get_block(&U256::from(hash))
             .map_err(|_err| ValueError::py_err(_err))?
         {
-            Some(block) => Ok(Some(PyBlock::from_block(&self.chain, block)?)),
+            Some(block) => Ok(Some(PyBlock::from_block(py, &self.chain, block)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn get_full_block(&self, py: Python, hash: &PyBytes) -> PyResult<Option<PyBlock>> {
+        let chain = self.lock();
+        let hash = hash.as_bytes();
+        if hash.len() != 32 {
+            return Err(TypeError::py_err("hash is 32 bytes"));
+        }
+        match chain
+            .tables
+            .read_full_block(&U256::from(hash))
+            .map_err(|_err| ValueError::py_err(_err))?
+        {
+            Some((block, txs)) => {
+                // only coinbase have inputs_cache
+                Ok(Some(PyBlock::from_full_block(py, &self.chain, block, txs)?))
+            },
             None => Ok(None),
         }
     }

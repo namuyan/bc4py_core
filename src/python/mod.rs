@@ -15,6 +15,7 @@ fn bc4py_core(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<pyaccount::PyAccount>()?;
     m.add_class::<pyaddr::PyAddress>()?;
     m.add_class::<pyblock::PyBlock>()?;
+    m.add_class::<pyblock::PyTxs>()?;
     m.add_class::<pytx::PyTx>()?;
     m.add_class::<pytx::PyTxInputs>()?;
     m.add_class::<pytx::PyTxOutputs>()?;
