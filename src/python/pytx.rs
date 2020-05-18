@@ -1,15 +1,19 @@
+use crate::balance::Balances;
+use crate::python::pyaccount::PyBalance;
 use crate::python::pyaddr::PyAddress;
 use crate::python::pychain::PyChain;
 use crate::python::pysigature::PySignature;
 use crate::python::pyunspent::PyUnspent;
-use crate::signature::signature_to_bytes;
+use crate::signature::{signature_to_bytes, verify_signature};
 use crate::tx::*;
 use crate::utils::*;
 use bigint::U256;
-use pyo3::exceptions::ValueError;
+use pyo3::exceptions::{AssertionError, IndexError, ValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 use pyo3::PyIterProtocol;
+
+type Address = [u8; 21];
 
 #[pyclass]
 pub struct PyTxInputs {
@@ -40,15 +44,31 @@ impl PyTxInputs {
         self.inputs.len()
     }
 
-    fn get(&self, py: Python, index: u8) -> PyResult<Option<PyObject>> {
+    fn get(&self, py: Python, index: u8) -> PyResult<PyObject> {
         match self.inputs.get(index as usize) {
             Some(input) => {
                 let hash = PyBytes::new(py, &u256_to_bytes(&input.0)).to_object(py);
                 let index = input.1.to_object(py);
-                Ok(Some(PyTuple::new(py, &[hash, index]).to_object(py)))
+                Ok(PyTuple::new(py, &[hash, index]).to_object(py))
             },
-            None => Ok(None),
+            None => Err(IndexError::py_err(format!(
+                "out of bounds index={} len={}",
+                index,
+                self.inputs.len()
+            ))),
         }
+    }
+
+    fn tuple(&self, py: Python) -> PyObject {
+        self.inputs
+            .iter()
+            .map(|input| {
+                let hash = PyBytes::new(py, u256_to_bytes(&input.0).as_ref()).to_object(py);
+                let index = input.1.to_object(py);
+                (hash, index)
+            })
+            .collect::<Vec<(PyObject, PyObject)>>()
+            .to_object(py)
     }
 
     fn add(&mut self, hash: &PyBytes, index: u8) -> PyResult<()> {
@@ -170,7 +190,7 @@ impl PyTxOutputs {
         self.outputs.len()
     }
 
-    fn get(&self, py: Python, index: u8) -> PyResult<Option<PyObject>> {
+    fn get(&self, py: Python, index: u8) -> PyResult<PyObject> {
         match self.outputs.get(index as usize) {
             Some(output) => {
                 let addr: _ = PyCell::new(py, PyAddress {
@@ -178,12 +198,27 @@ impl PyTxOutputs {
                 })?;
                 let coin_id = output.1.to_object(py);
                 let amount = output.2.to_object(py);
-                Ok(Some(
-                    PyTuple::new(py, &[addr.into(), coin_id, amount]).to_object(py),
-                ))
+                Ok(PyTuple::new(py, &[addr.into(), coin_id, amount]).to_object(py))
             },
-            None => Ok(None),
+            None => Err(IndexError::py_err(format!(
+                "out of bounds index={} len={}",
+                index,
+                self.outputs.len()
+            ))),
         }
+    }
+
+    fn tuple(&self, py: Python) -> PyObject {
+        self.outputs
+            .iter()
+            .map(|output| {
+                let addr = PyCell::new(py, PyAddress { addr: output.0 }).unwrap();
+                let coin_id = output.1.to_object(py);
+                let amount = output.2.to_object(py);
+                (addr.into(), coin_id, amount)
+            })
+            .collect::<Vec<(PyObject, PyObject, PyObject)>>()
+            .to_object(py)
     }
 
     fn add(&mut self, addr: &PyBytes, coin_id: u32, amount: u64) -> PyResult<()> {
@@ -299,6 +334,11 @@ pub struct PyTx {
     // for verify
     pub signature: Option<Py<PySignature>>,
     pub inputs_cache: Option<Vec<TxOutput>>,
+    pub verified_list: Option<Vec<Address>>,
+
+    // object creation time
+    #[pyo3(get, set)]
+    pub create_time: f64,
 }
 
 #[pymethods]
@@ -338,12 +378,19 @@ impl PyTx {
             message,
             signature: None,
             inputs_cache: None,
+            verified_list: None,
+            create_time: get_current_time(),
         })
     }
 
+    fn hex(&self, py: Python) -> String {
+        // for debug
+        let hash = self.clone_to_body(py).hash();
+        hex::encode(hash.as_slice())
+    }
+
     fn hash(&self, py: Python) -> PyObject {
-        let tx = self.clone_to_manual(py);
-        let hash = tx.body.hash();
+        let hash = self.clone_to_body(py).hash();
         PyBytes::new(py, hash.as_ref()).to_object(py)
     }
 
@@ -395,7 +442,7 @@ impl PyTx {
         self.signature.replace(value.into());
     }
 
-    fn fill_input_cache(&mut self, py: Python, chain: PyRef<PyChain>) -> PyResult<()> {
+    fn fill_input_cache(&mut self, py: Python, ignore: bool, chain: PyRef<PyChain>) -> PyResult<()> {
         if self.inputs_cache.is_some() {
             return Err(ValueError::py_err("already input_cache is filled"));
         }
@@ -406,7 +453,7 @@ impl PyTx {
         for input in inputs_rc.inputs.iter() {
             match chain
                 .lock()
-                .get_output_of_input(input, true)
+                .get_output_of_input(input, ignore)
                 .map_err(|err| ValueError::py_err(err))?
             {
                 Some(output) => inputs_cache.push(output),
@@ -424,22 +471,104 @@ impl PyTx {
         Ok(())
     }
 
-    fn get_input_cache(&self, py: Python) -> Option<PyObject> {
-        match self.inputs_cache.as_ref() {
-            Some(inputs) => {
-                let inputs = inputs
-                    .iter()
-                    .map(|input| {
-                        let addr = PyBytes::new(py, input.0.as_ref()).to_object(py);
-                        let coin_id = input.1.to_object(py);
-                        let amount = input.2.to_object(py);
-                        PyTuple::new(py, &[addr, coin_id, amount]).to_object(py)
-                    })
-                    .collect::<Vec<PyObject>>();
-                Some(PyTuple::new(py, &inputs).to_object(py))
-            },
-            None => None,
+    fn get_input_cache(&self) -> PyResult<PyTxOutputs> {
+        if self.inputs_cache.is_none() {
+            return Err(AssertionError::py_err("input_cache is none"));
         }
+        Ok(PyTxOutputs {
+            iter_index: None,
+            outputs: self.inputs_cache.as_ref().unwrap().iter().cloned().collect(),
+        })
+    }
+
+    fn fill_verified_list(&mut self, py: Python) -> PyResult<()> {
+        if self.verified_list.is_some() {
+            return Err(AssertionError::py_err("already filled verified_list"));
+        }
+        if self.signature.is_none() {
+            return Err(AssertionError::py_err(
+                "cannot fill verified_list because signature is none",
+            ));
+        }
+        // calc signature -> address
+        let cell: &PyCell<PySignature> = self.signature.as_ref().unwrap().as_ref(py);
+        let signs = &cell.borrow().signs;
+        let binary = self.clone_to_body(py).to_bytes();
+        let mut verified_list = Vec::with_capacity(signs.len());
+        for signature in signs.iter() {
+            let result = verify_signature(signature, &binary);
+            if result.is_ok() && result.unwrap() {
+                verified_list.push(signature.get_address(0));
+            } else {
+                return Err(ValueError::py_err(format!(
+                    "verification failed at {:?} by {:?}",
+                    signature, result
+                )));
+            }
+        }
+        // success
+        self.verified_list.replace(verified_list);
+        Ok(())
+    }
+
+    fn get_verified_list(&mut self) -> PyResult<Vec<PyAddress>> {
+        if self.verified_list.is_none() {
+            // exec `fill_verified_list()` before
+            return Err(ValueError::py_err(
+                "cannot get verified addr because verified_list is none",
+            ));
+        }
+        Ok(self
+            .verified_list
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|addr| PyAddress { addr: *addr })
+            .collect())
+    }
+
+    fn get_fee(&self, py: Python, check: bool) -> PyResult<PyBalance> {
+        let inputs = self
+            .inputs_cache
+            .as_ref()
+            .ok_or(AssertionError::py_err("try to get_fee but inputs_cache is none"))?;
+
+        // fee = inputs - outputs
+        let mut fee = Balances(Vec::with_capacity(1));
+        for input in inputs.iter() {
+            fee.add(input.1, input.2);
+        }
+        let cell: &PyCell<PyTxOutputs> = self.outputs.as_ref(py);
+        for output in cell.borrow().outputs.iter() {
+            fee.sub(output.1, output.2);
+        }
+        fee.compaction();
+
+        // check amount (optional)
+        if check {
+            let real = self.gas_price as i64 * self.gas_amount;
+            let calc = fee.sum();
+            if real != calc {
+                return Err(ValueError::py_err(format!(
+                    "mismatch fee amount real={} calc={}",
+                    real, calc
+                )));
+            }
+        }
+
+        // success
+        Ok(PyBalance {
+            iter_index: None,
+            balance: fee,
+        })
+    }
+
+    pub fn get_size(&self, py: Python) -> usize {
+        // note: not include signature size
+        let inputs: &PyCell<PyTxInputs> = self.inputs.as_ref(py);
+        let outputs: &PyCell<PyTxOutputs> = self.outputs.as_ref(py);
+        // 39 is tx_static size
+        39 + inputs.borrow().len() * 33 + outputs.borrow().len() * 33 + self.message.length()
     }
 
     pub fn getinfo(&self, py: Python) -> PyResult<PyObject> {
@@ -499,7 +628,7 @@ impl PyTx {
         }
         // dict.set_item("hash_locked", )?; REMOVED
         // dict.set_item("recode_flag", )?; REMOVED
-        // dict.set_item("create_time", )?; REMOVED
+        dict.set_item("create_time", self.create_time)?;
         let body_size = tx.body.get_size();
         dict.set_item("size", body_size)?;
         dict.set_item("total_size", match tx.get_signature_size() {
@@ -537,6 +666,8 @@ impl PyTx {
             message: tx.body.message,
             signature: Some(signature.into()),
             inputs_cache: None,
+            verified_list: None,
+            create_time: get_current_time(),
         })
     }
 
@@ -564,6 +695,8 @@ impl PyTx {
             message: tx.body.message,
             signature: Some(signature.into()),
             inputs_cache: Some(tx.inputs_cache),
+            verified_list: None,
+            create_time: get_current_time(),
         })
     }
 
@@ -641,5 +774,24 @@ impl PyTx {
             signature,
             inputs_cache,
         })
+    }
+
+    pub fn clone_to_body(&self, py: Python) -> TxBody {
+        // covert PyTx to tx body
+        let cell: &PyCell<PyTxInputs> = self.inputs.as_ref(py);
+        let inputs_rc: PyRef<PyTxInputs> = cell.borrow();
+        let cell: &PyCell<PyTxOutputs> = self.outputs.as_ref(py);
+        let output_rc: PyRef<PyTxOutputs> = cell.borrow();
+        TxBody {
+            version: self.version,
+            txtype: self.txtype.clone(),
+            time: self.time,
+            deadline: self.deadline,
+            inputs: inputs_rc.inputs.clone(),
+            outputs: output_rc.outputs.clone(),
+            gas_price: self.gas_price,
+            gas_amount: self.gas_amount,
+            message: self.message.clone(),
+        }
     }
 }

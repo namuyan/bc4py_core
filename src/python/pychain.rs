@@ -4,7 +4,7 @@ use crate::python::pyunspent::PyUnspent;
 use crate::python::{pyaccount::*, pyaddr::PyAddress, pyblock::PyBlock, pytx::PyTx};
 use crate::tx::{TxInput, TxOutput};
 use bigint::U256;
-use pyo3::exceptions::{TypeError, ValueError};
+use pyo3::exceptions::{AssertionError, TypeError, ValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::cmp::{Ordering, PartialOrd};
@@ -107,6 +107,24 @@ impl PyChain {
                 Ok(Some(PyBlock::from_full_block(py, &self.chain, block, txs)?))
             },
             None => Ok(None),
+        }
+    }
+
+    fn get_best_block(&self, py: Python, full: bool) -> PyResult<PyBlock> {
+        let chain = self.lock();
+        match chain.best_chain.get(0) {
+            Some(hash) => {
+                if full {
+                    let (block, txs) = chain.tables.read_full_block(hash).unwrap().unwrap();
+                    PyBlock::from_full_block(py, &self.chain, block, txs)
+                } else {
+                    let block = chain.tables.read_block(hash).unwrap().unwrap();
+                    PyBlock::from_block(py, &self.chain, block)
+                }
+            },
+            None => Err(AssertionError::py_err(
+                "try to get best block but best_chain is empty",
+            )),
         }
     }
 

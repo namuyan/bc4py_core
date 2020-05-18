@@ -1,4 +1,5 @@
 use crate::signature::utils::*;
+use crate::utils::sha256ripemd160;
 use std::fmt;
 
 mod aggregate;
@@ -8,6 +9,7 @@ mod utils;
 // signature data type
 type POINT = [u8; 33];
 type SCALAR = [u8; 32];
+type Address = [u8; 21];
 
 #[derive(Clone)]
 pub enum Signature {
@@ -102,6 +104,15 @@ impl Signature {
         } else {
             Err(())
         }
+    }
+
+    pub fn get_address(&self, ver: u8) -> Address {
+        let pk = match &self {
+            Signature::SingleSig(a) => a.0,
+            Signature::AggregateSig(a) => a.0,
+            Signature::ThresholdSig(a) => a.0,
+        };
+        sha256ripemd160(ver, &pk)
     }
 }
 

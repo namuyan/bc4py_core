@@ -94,4 +94,16 @@ impl PySignature {
         );
         Ok(())
     }
+
+    fn get_size(&self) -> usize {
+        let mut size = 0;
+        for signature in self.signs.iter() {
+            size += get_signature_size(signature);
+        }
+        size
+    }
+
+    fn len(&self) -> usize {
+        self.signs.len()
+    }
 }

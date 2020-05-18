@@ -99,6 +99,14 @@ impl Balances {
         }
     }
 
+    pub fn sub(&mut self, coin_id: u32, amount: u64) {
+        let amount = amount as i64 * -1; // minus
+        match self.0.iter_mut().find(|_b| _b.coin_id == coin_id) {
+            Some(balance) => balance.amount += amount,
+            None => self.0.push(Balance { coin_id, amount }),
+        }
+    }
+
     pub fn add_balance(&mut self, other: &Balance) {
         match self.0.iter_mut().find(|_b| _b.coin_id == other.coin_id) {
             Some(_balance) => _balance.amount += other.amount,

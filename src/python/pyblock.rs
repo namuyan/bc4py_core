@@ -8,7 +8,7 @@ use pyo3::basic::CompareOp;
 use pyo3::exceptions::{IndexError, ValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyType};
-use pyo3::PyObjectProtocol;
+use pyo3::{PyIterProtocol, PyObjectProtocol};
 use std::fmt;
 
 enum PyTxsEnum {
@@ -31,7 +31,7 @@ impl fmt::Debug for PyTxsEnum {
                     .map(|tx| {
                         let cell: &PyCell<PyTx> = tx.as_ref(py);
                         let tx_rc: PyRef<PyTx> = cell.borrow();
-                        tx_rc.clone_to_manual(py).hash()
+                        U256::from(tx_rc.clone_to_body(py).hash().as_slice())
                     })
                     .collect()
             },
@@ -49,7 +49,31 @@ impl fmt::Debug for PyTxsEnum {
 #[pyclass]
 #[derive(Debug)]
 pub struct PyTxs {
+    iter_index: Option<usize>,
     txs: PyTxsEnum,
+}
+
+#[pyproto]
+impl PyIterProtocol for PyTxs {
+    fn __iter__(mut slf: PyRefMut<Self>) -> PyResult<PyObject> {
+        let py = unsafe { Python::assume_gil_acquired() };
+        slf.iter_index.replace(0);
+        Ok(slf.into_py(py))
+    }
+
+    fn __next__(mut slf: PyRefMut<Self>) -> PyResult<Option<PyObject>> {
+        let py = unsafe { Python::assume_gil_acquired() };
+        let index = slf.iter_index.unwrap();
+        *slf.iter_index.as_mut().unwrap() += 1; // pre increment
+        let result = slf.get(py, index);
+        if result.is_err() {
+            // error means index is out of bounds
+            slf.iter_index.take();
+            Ok(None)
+        } else {
+            Ok(Some(result.unwrap()))
+        }
+    }
 }
 
 #[pymethods]
@@ -81,6 +105,7 @@ impl PyTxs {
                     }
                 }
                 Ok(PyTxs {
+                    iter_index: None,
                     txs: PyTxsEnum::Hashs(hashs),
                 })
             },
@@ -88,6 +113,7 @@ impl PyTxs {
                 let cell: Vec<&PyCell<PyTx>> = txs.extract()?;
                 let objs = cell.iter().map(|tx| (*tx).into()).collect();
                 Ok(PyTxs {
+                    iter_index: None,
                     txs: PyTxsEnum::Objects(objs),
                 })
             },
@@ -127,6 +153,27 @@ impl PyTxs {
                     vec.len()
                 ))),
             },
+        }
+    }
+
+    fn index(&self, py: Python, obj: &PyAny) -> PyResult<usize> {
+        // Raises ValueError if the value is not present.
+        let hash = self.obj_to_u256(py, obj)?;
+        let result = match &self.txs {
+            PyTxsEnum::Hashs(vec) => vec.iter().position(|txhash| txhash == &hash),
+            PyTxsEnum::Objects(_) => {
+                let vec = self.hash_list(py);
+                vec.iter().position(|txhash| txhash == &hash)
+            },
+        };
+        result.ok_or(ValueError::py_err(format!("not found obj {:?}", obj)))
+    }
+
+    fn contain(&self, py: Python, obj: &PyAny) -> PyResult<bool> {
+        let hash = self.obj_to_u256(py, obj)?;
+        match &self.txs {
+            PyTxsEnum::Hashs(vec) => Ok(vec.contains(&hash)),
+            PyTxsEnum::Objects(_) => Ok(self.hash_list(py).contains(&hash)),
         }
     }
 
@@ -240,6 +287,24 @@ impl PyTxs {
 }
 
 impl PyTxs {
+    fn obj_to_u256(&self, py: Python, obj: &PyAny) -> PyResult<U256> {
+        // both bytes or PyTx to U256
+        match obj.extract::<Vec<u8>>() {
+            Ok(hash) => {
+                if hash.len() == 32 {
+                    Ok(U256::from(hash.as_slice()))
+                } else {
+                    Err(ValueError::py_err("hash is 32 bytes"))
+                }
+            },
+            Err(_) => {
+                // may not bytes
+                let tx: &PyCell<PyTx> = obj.extract()?;
+                Ok(U256::from(tx.borrow().clone_to_body(py).hash().as_slice()))
+            },
+        }
+    }
+
     fn hash_list(&self, py: Python) -> Vec<U256> {
         match &self.txs {
             PyTxsEnum::Hashs(vec) => vec.clone(),
@@ -248,7 +313,7 @@ impl PyTxs {
                 .map(|tx| {
                     let cell: &PyCell<PyTx> = tx.as_ref(py);
                     let tx_rc: PyRef<PyTx> = cell.borrow();
-                    tx_rc.clone_to_manual(py).hash()
+                    U256::from(tx_rc.clone_to_body(py).hash().as_slice())
                 })
                 .collect(),
         }
@@ -279,6 +344,10 @@ pub struct PyBlock {
 
     // body
     pub txs: Py<PyTxs>,
+
+    // object creation time
+    #[pyo3(get, set)]
+    pub create_time: f64,
 }
 
 #[pyproto]
@@ -341,12 +410,19 @@ impl PyBlock {
                 bias,
                 header,
                 txs: txs.into(),
+                create_time: get_current_time(),
             })
         } else {
             Err(ValueError::py_err(
                 "previous_hash, merkleroot and txs_hash is 32bytes hash",
             ))
         }
+    }
+
+    fn hex(&self) -> String {
+        // for debug
+        let hash = sha256double(&self.header.to_bytes());
+        hex::encode(hash.as_slice())
     }
 
     fn hash(&self, py: Python) -> PyObject {
@@ -377,6 +453,7 @@ impl PyBlock {
                 bias,
                 header,
                 txs: txs.into(),
+                create_time: get_current_time(),
             })
         } else {
             Err(ValueError::py_err(
@@ -527,6 +604,22 @@ impl PyBlock {
         self.header.nonce = new_nonce;
     }
 
+    fn get_size(&self, py: Python) -> PyResult<usize> {
+        // return block_header + txs (not include signature)
+        let txs: &PyCell<PyTxs> = self.txs.as_ref(py);
+        match &txs.borrow().txs {
+            PyTxsEnum::Hashs(_) => Err(ValueError::py_err("try to get_size but txs' type is hash")),
+            PyTxsEnum::Objects(vec) => {
+                let mut size = 0;
+                for tx in vec.iter() {
+                    let tx: &PyCell<PyTx> = tx.as_ref(py);
+                    size += tx.borrow().get_size(py);
+                }
+                Ok(80 + size)
+            },
+        }
+    }
+
     fn getinfo(&self, py: Python) -> PyResult<PyObject> {
         // for debug method just looked by humans
         let dict = PyDict::new(py);
@@ -571,7 +664,7 @@ impl PyBlock {
             },
         };
         dict.set_item("txs", txs)?;
-        // dict.set_item("create_time", )?;  REMOVED
+        dict.set_item("create_time", self.create_time)?;
         // dict.set_item("size", )?;  REMOVED
         dict.set_item("hex", hex::encode(self.header.to_bytes().as_ref()))?;
         Ok(dict.to_object(py))
@@ -601,6 +694,7 @@ impl PyBlock {
     pub fn from_block(py: Python, chain: &SharedChain, block: Block) -> PyResult<Self> {
         // moved
         let txs = PyTxs {
+            iter_index: None,
             txs: PyTxsEnum::Hashs(block.txs_hash),
         };
         let txs: _ = PyCell::new(py, txs)?;
@@ -612,6 +706,7 @@ impl PyBlock {
             chain: chain.clone(),
             header: block.header,
             txs: txs.into(),
+            create_time: get_current_time(),
         })
     }
 
@@ -622,6 +717,7 @@ impl PyBlock {
             vec.push(Py::new(py, PyTx::from_recoded(py, tx)?)?);
         }
         let txs = PyTxs {
+            iter_index: None,
             txs: PyTxsEnum::Objects(vec),
         };
         let txs: _ = PyCell::new(py, txs)?;
@@ -633,6 +729,7 @@ impl PyBlock {
             chain: chain.clone(),
             header: block.header,
             txs: txs.into(),
+            create_time: get_current_time(),
         })
     }
 
