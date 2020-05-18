@@ -14,7 +14,7 @@
 /// https://github.com/loki-project/loki/pull/26   or
 /// https://github.com/graft-project/GraftNetwork/pull/118/files
 use crate::block::*;
-use crate::chain::Chain;
+use crate::chain::tables::Tables;
 use bigint::{U256, U512};
 use std::cmp::max;
 use std::collections::HashMap;
@@ -73,7 +73,7 @@ impl DifficultyBuilder {
         &mut self,
         previous_hash: &U256,
         flag: &BlockFlag,
-        chain: &Chain,
+        tables: &Tables,
     ) -> Result<u32, String> {
         if *previous_hash == *GENESIS_PREVIOUS_HASH {
             return Ok(MAX_BITS);
@@ -91,7 +91,7 @@ impl DifficultyBuilder {
         let mut breaked = false;
         let mut j = 0;
         for _ in 0..MAX_SEARCH_BLOCKS {
-            let result = self.get_header_ref(&target_hash, chain)?;
+            let result = self.get_header_ref(&target_hash, tables)?;
 
             // may reached root
             if result.is_none() {
@@ -165,7 +165,7 @@ impl DifficultyBuilder {
         &mut self,
         previous_hash: &U256,
         flag: &BlockFlag,
-        chain: &Chain,
+        tables: &Tables,
     ) -> Result<f64, String> {
         let N = 30u32; // target blocks
 
@@ -185,7 +185,7 @@ impl DifficultyBuilder {
         let mut others_best = HashMap::with_capacity(self.params.len());
         let mut target_hash = previous_hash.clone();
         for _ in 0..MAX_SEARCH_BLOCKS {
-            let result = self.get_header_ref(&target_hash, chain)?;
+            let result = self.get_header_ref(&target_hash, tables)?;
 
             // may reached root
             if result.is_none() {
@@ -239,11 +239,11 @@ impl DifficultyBuilder {
         }
     }
 
-    fn get_header_ref(&mut self, hash: &U256, chain: &Chain) -> Result<Option<&MetaHeader>, String> {
+    fn get_header_ref(&mut self, hash: &U256, tables: &Tables) -> Result<Option<&MetaHeader>, String> {
         // note: err occur by tables exception
         if !self.cache.contains_key(hash) {
             // need to insert new header
-            match chain.get_block(hash)? {
+            match tables.read_block(hash)? {
                 Some(block) => {
                     let header = MetaHeader {
                         height: block.height,

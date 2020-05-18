@@ -2,6 +2,7 @@ pub mod pyaccount;
 pub mod pyaddr;
 pub mod pyblock;
 pub mod pychain;
+pub mod pydiff;
 pub mod pysigature;
 pub mod pytx;
 pub mod pyunspent;
@@ -16,6 +17,7 @@ fn bc4py_core(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<pyaddr::PyAddress>()?;
     m.add_class::<pyblock::PyBlock>()?;
     m.add_class::<pyblock::PyTxs>()?;
+    m.add_class::<pydiff::PyDiffBuilder>()?;
     m.add_class::<pytx::PyTx>()?;
     m.add_class::<pytx::PyTxInputs>()?;
     m.add_class::<pytx::PyTxOutputs>()?;
