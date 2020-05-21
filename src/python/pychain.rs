@@ -86,7 +86,7 @@ impl PyChain {
             .get_block(&U256::from(hash))
             .map_err(|_err| ValueError::py_err(_err))?
         {
-            Some(block) => Ok(Some(PyBlock::from_block(py, &self.chain, block)?)),
+            Some(block) => Ok(Some(PyBlock::from_block(py, block)?)),
             None => Ok(None),
         }
     }
@@ -104,7 +104,7 @@ impl PyChain {
         {
             Some((block, txs)) => {
                 // only coinbase have inputs_cache
-                Ok(Some(PyBlock::from_full_block(py, &self.chain, block, txs)?))
+                Ok(Some(PyBlock::from_full_block(py, block, txs)?))
             },
             None => Ok(None),
         }
@@ -116,10 +116,10 @@ impl PyChain {
             Some(hash) => {
                 if full {
                     let (block, txs) = chain.tables.read_full_block(hash).unwrap().unwrap();
-                    PyBlock::from_full_block(py, &self.chain, block, txs)
+                    PyBlock::from_full_block(py, block, txs)
                 } else {
                     let block = chain.tables.read_block(hash).unwrap().unwrap();
-                    PyBlock::from_block(py, &self.chain, block)
+                    PyBlock::from_block(py, block)
                 }
             },
             None => Err(AssertionError::py_err(

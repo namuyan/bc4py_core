@@ -1,5 +1,4 @@
 use crate::block::*;
-use crate::python::pychain::{PyChain, SharedChain};
 use crate::python::pytx::PyTx;
 use crate::tx::{BlockTxs, TxVerifiable};
 use crate::utils::*;
@@ -318,6 +317,13 @@ impl PyTxs {
                 .collect(),
         }
     }
+
+    pub fn from_hash_vec(hashs: Vec<U256>) -> Self {
+        PyTxs {
+            iter_index: None,
+            txs: PyTxsEnum::Hashs(hashs),
+        }
+    }
 }
 
 #[pyproto]
@@ -329,8 +335,6 @@ impl PyObjectProtocol for PyTxs {
 
 #[pyclass]
 pub struct PyBlock {
-    chain: SharedChain,
-
     // meta
     pub work_hash: Option<U256>,
     #[pyo3(get)]
@@ -372,7 +376,6 @@ impl PyBlock {
     #[new]
     fn new(
         py: Python,
-        chain: PyRef<PyChain>,
         height: u32,
         flag: u8,
         bias: f32,
@@ -403,7 +406,6 @@ impl PyBlock {
                 nonce,
             };
             Ok(PyBlock {
-                chain: chain.clone_chain(),
                 work_hash: None,
                 height,
                 flag,
@@ -433,7 +435,6 @@ impl PyBlock {
     #[classmethod]
     fn from_binary(
         _cls: &PyType,
-        chain: PyRef<PyChain>,
         height: u32,
         flag: u8,
         bias: f32,
@@ -446,7 +447,6 @@ impl PyBlock {
         if binary.len() == 80 {
             let header = BlockHeader::from_bytes(binary);
             Ok(PyBlock {
-                chain: chain.clone_chain(),
                 work_hash: None,
                 height,
                 flag,
@@ -571,25 +571,6 @@ impl PyBlock {
         }
     }
 
-    fn is_orphan(&self) -> bool {
-        // note: get chain lock
-        let chain = self.chain.lock().unwrap();
-        let hash = self.header.hash();
-
-        // from confirmed
-        if chain.best_chain.contains(&hash) {
-            return false;
-        }
-
-        // from tables
-        if chain.tables.read_block(&hash).unwrap().is_some() {
-            return false;
-        }
-
-        // not found in tables and confirmed
-        true
-    }
-
     fn update_time(&mut self, time: u32) {
         self.header.time = time;
     }
@@ -633,8 +614,8 @@ impl PyBlock {
         }
         dict.set_item("previous_hash", u256_to_hex(&self.header.previous_hash))?;
         // dict.set_item("next_hash", )?; REMOVED
-        dict.set_item("is_orphan", self.is_orphan())?; // note: get chain lock
-                                                       // dict.set_item("recode_flag", )?; REMOVED
+        // dict.set_item("is_orphan", self.is_orphan())?; REMOVED
+        // dict.set_item("recode_flag", )?; REMOVED
         dict.set_item("height", self.height)?;
         let (difficulty, _work) = self.two_difficulties()?;
         dict.set_item("difficulty", difficulty)?;
@@ -691,7 +672,7 @@ impl fmt::Debug for PyBlock {
 }
 
 impl PyBlock {
-    pub fn from_block(py: Python, chain: &SharedChain, block: Block) -> PyResult<Self> {
+    pub fn from_block(py: Python, block: Block) -> PyResult<Self> {
         // moved
         let txs = PyTxs {
             iter_index: None,
@@ -703,14 +684,13 @@ impl PyBlock {
             height: block.height,
             flag: block.flag,
             bias: block.bias,
-            chain: chain.clone(),
             header: block.header,
             txs: txs.into(),
             create_time: get_current_time(),
         })
     }
 
-    pub fn from_full_block(py: Python, chain: &SharedChain, block: Block, txs: BlockTxs) -> PyResult<Self> {
+    pub fn from_full_block(py: Python, block: Block, txs: BlockTxs) -> PyResult<Self> {
         // moved
         let mut vec = Vec::with_capacity(txs.len());
         for tx in txs.into_iter() {
@@ -726,7 +706,6 @@ impl PyBlock {
             height: block.height,
             flag: block.flag,
             bias: block.bias,
-            chain: chain.clone(),
             header: block.header,
             txs: txs.into(),
             create_time: get_current_time(),

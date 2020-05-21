@@ -141,7 +141,6 @@ class PyBlock:
     def __init__(
             self,
             # meta
-            chain: PyChain,
             height: int,
             flag: int,
             bias: float,
@@ -157,7 +156,6 @@ class PyBlock:
     @classmethod
     def from_binary(
             cls,
-            chain: PyChain,
             height: int,
             flag: int,
             bias: float,
@@ -170,7 +168,6 @@ class PyBlock:
         """:returns: (required, work)"""
     def update_merkleroot(self) -> None: ...
     def check_proof_of_work(self) -> bool: ...
-    def is_orphan(self) -> bool: ...
     def update_time(self, time: int) -> None: ...
     def update_nonce(self, nonce: int) -> None: ...
     def increment_nonce(self) -> None: ...
@@ -277,3 +274,19 @@ class PyDiffBuilder:
     def target_to_bits(target: bytes) -> int: ...
     @staticmethod
     def target_to_diff(target: bytes) -> float: ...
+
+
+class PyValidate:
+    def __init__(self, chain: PyChain) -> None: ...
+    def is_unconfirmed(self, hash: bytes) -> bool:
+        """**true** means the txhash is unconfirmed but **false** means confirmed or not exist"""
+    def is_mature_input(self, base_hash: bytes, limit_height: int) -> bool:
+        """this method is designed for PoS coinbase tx's input check"""
+    def is_unused_inputs(self, inputs: PyTxInputs, except_hash: bytes, best_block: Optional[PyBlock]) -> bool:
+        """check inputs already used on both unconfirmed and confirmed status, return **true** means valid"""
+    def is_orphan_block(self, block: PyBlock) -> bool:
+        """check the block included by best_chain or recoded to tables and indexed"""
+    def clear_old_unconfirmed(self, deadline: int) -> int:
+        """remove expired unconfirmed txs by deadline and return removed count"""
+    def get_best_unconfirmed(self, maxsize: int) -> PyTxs:
+        """get list of unconfirmed tx's hash list for mining"""

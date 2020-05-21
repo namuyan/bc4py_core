@@ -18,7 +18,7 @@ type Address = [u8; 21];
 #[pyclass]
 pub struct PyTxInputs {
     iter_index: Option<usize>,
-    inputs: Vec<TxInput>,
+    pub inputs: Vec<TxInput>,
 }
 
 #[pymethods]
@@ -482,9 +482,9 @@ impl PyTx {
     }
 
     fn fill_verified_list(&mut self, py: Python) -> PyResult<()> {
-        if self.verified_list.is_some() {
-            return Err(AssertionError::py_err("already filled verified_list"));
-        }
+        // if self.verified_list.is_some() {
+        //     return Err(AssertionError::py_err("already filled verified_list"));
+        // }
         if self.signature.is_none() {
             return Err(AssertionError::py_err(
                 "cannot fill verified_list because signature is none",

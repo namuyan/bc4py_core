@@ -271,6 +271,55 @@ impl Chain {
 
         Ok(output)
     }
+
+    pub fn is_unused_input(
+        &self,
+        input: &TxInput,
+        except_hash: &U256,
+        best_block: &Option<(Block, Vec<TxVerifiable>)>,
+        best_chain: &BlockHashVec,
+    ) -> Result<bool, String> {
+        // check inputs is unused(True) or not(False)
+        if best_block.is_some() {
+            // check BestBlock is Block(n+1)
+            let (block, _txs) = best_block.as_ref().unwrap();
+            assert_eq!(*best_chain.first().unwrap(), block.header.previous_hash);
+        }
+
+        // note:
+        // check unconfirmed tx if best_block is none
+        // check block included tx if best_block is some
+        let mut is_unused = false;
+
+        // check tables
+        if self.tables.read_utxo_index(input).unwrap().is_some() {
+            // tables say `unused` but used at confirmed or unconfirmed
+            is_unused = true;
+        }
+
+        // check confirmed
+        match self
+            .confirmed
+            .is_unused_input(input, except_hash, best_block, best_chain, &mut is_unused)?
+        {
+            Some(skip_flag) => return Ok(skip_flag),
+            None => (), // continue
+        }
+
+        // check unconfirmed
+        if best_block.is_none() {
+            match self
+                .unconfirmed
+                .is_unused_input(&input, &except_hash, &mut is_unused)
+            {
+                Some(skip_flag) => return Ok(skip_flag),
+                None => (), // continue
+            }
+        }
+
+        // all check passed
+        Ok(is_unused)
+    }
 }
 
 // get account info

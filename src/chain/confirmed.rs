@@ -238,6 +238,57 @@ impl ConfirmedBuilder {
         Ok(())
     }
 
+    pub fn is_unused_input(
+        &self,
+        input: &TxInput,
+        except_hash: &U256,
+        best_block: &Option<(Block, Vec<TxVerifiable>)>,
+        best_chain: &BlockHashVec,
+        is_unused: &mut bool,
+    ) -> Result<Option<bool>, String> {
+        // check the input is unused or not on confirmed section
+
+        // best_block is not recoded to tables because it usn't validate
+        if best_block.is_some() {
+            // check tx included by the best_block
+            let (_block, txs) = best_block.as_ref().unwrap();
+            // just check a best_block
+            for tx in txs.iter() {
+                if &tx.hash == except_hash {
+                    continue;
+                }
+                if tx.hash == input.0 {
+                    *is_unused = true;
+                }
+                // check the input is already used by confirmed tx
+                if tx.body.inputs.contains(input) {
+                    return Ok(Some(false));
+                }
+            }
+        } else {
+            // check unconfirmed tx (default best_chain)
+        }
+
+        // check confirmed section
+        for blockhash in best_chain.iter() {
+            let confirmed = self.tree.get(blockhash).unwrap();
+            for txhash in confirmed.block.txs_hash.iter() {
+                if txhash == except_hash {
+                    continue;
+                }
+                if *txhash == input.0 {
+                    *is_unused = true;
+                }
+            }
+            // check the input is already used by confirmed tx
+            if confirmed.inputs.contains(input) {
+                return Ok(Some(false));
+            }
+        }
+        // continue checking
+        Ok(None)
+    }
+
     pub fn push_new_block(
         &mut self,
         block: Block,

@@ -482,6 +482,24 @@ impl UnconfirmedBuilder {
         Ok(())
     }
 
+    pub fn is_unused_input(&self, input: &TxInput, except_hash: &U256, is_unused: &mut bool) -> Option<bool> {
+        // check the input is unused or not on unconfirmed section
+        while let Some(unconfirmed) = self.txs.streaming().next() {
+            if &unconfirmed.hash == except_hash {
+                continue;
+            }
+            if unconfirmed.hash == input.0 {
+                *is_unused = true;
+            }
+            // check the input is already used by unconfirmed tx
+            if unconfirmed.depend_hashs.contains(&input.0) {
+                return Some(false);
+            }
+        }
+        // continue checking
+        None
+    }
+
     /// remove unconfirmed tx with depend it
     fn remove_with_depend_myself(&mut self, hash: &U256, deleted: &mut Vec<Unconfirmed>) {
         // find position
