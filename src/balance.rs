@@ -2,11 +2,22 @@ use crate::utils::*;
 use bigint::U256;
 use std::cmp::{Ordering, PartialEq, PartialOrd};
 use std::collections::HashMap;
+use std::fmt;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Balance {
     pub coin_id: u32,
     pub amount: i64, // allow minus balance
+}
+
+impl fmt::Debug for Balance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.coin_id == 0 {
+            f.write_fmt(format_args!("{}", self.amount))
+        } else {
+            f.write_fmt(format_args!("{}:{}", self.coin_id, self.amount))
+        }
+    }
 }
 
 impl Balance {
@@ -138,6 +149,18 @@ pub struct BalanceMovement {
     pub fee: Balances, // note: unused
     outgoing: Balances,
     incoming: Vec<(u32, bool, Balance)>, // (accountId, isInner, balance)
+}
+
+impl fmt::Debug for BalanceMovement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entry(&"type", &self.get_movement_type())
+            .entry(&"hash", &u256_to_hex(&self.hash))
+            .entry(&"fee", &self.fee)
+            .entry(&"outgoing", &self.outgoing)
+            .entry(&"incoming", &self.incoming)
+            .finish()
+    }
 }
 
 impl BalanceMovement {

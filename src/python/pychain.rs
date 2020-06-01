@@ -167,7 +167,14 @@ impl PyChain {
         }
     }
 
-    fn get_account_addr_path(&self, addr: PyRef<PyAddress>) -> Option<(u32, bool, u32)> {
+    fn get_account_address(&self, account_id: u32, new: bool) -> PyResult<PyAddress> {
+        match self.lock().get_account_address(account_id, new) {
+            Ok(addr) => Ok(PyAddress { addr }),
+            Err(err) => Err(ValueError::py_err(err)),
+        }
+    }
+
+    fn get_account_addr_path(&self, addr: PyRef<PyAddress>) -> Option<(u32, u32, u32)> {
         // find address derive path `m/44'/CoinType'/account'/is_inner/index`
         self.lock().account.get_path_from_addr(&addr.addr)
     }
@@ -313,6 +320,45 @@ impl PyChain {
         }
         // success
         Ok(unspent)
+    }
+
+    fn list_unspent_for_staking(&self, mature_height: u32, mut limit: usize) -> (Vec<PyUnspent>, usize) {
+        // list unspent for staking limited by some condition
+        let chain = self.chain.lock().unwrap();
+        let best_block = chain.get_best_block_ref();
+        let mut unspents = Vec::with_capacity(limit);
+        let mut total = 0usize;
+        for (input, output) in chain.get_account_unspent_iter() {
+            total += 1;
+            // check conditions
+            if output.1 != 0 {
+                continue; // skip: coinId is 0
+            }
+            if output.0[0] != 0 {
+                continue; // skip: AddrVer is 0
+            }
+            if output.2 < 1_0000_0000 {
+                continue; // skip: amount is more than 1.0
+            }
+            // check height
+            match chain.get_tx_height(&input.0) {
+                Ok(Some(height)) => {
+                    if best_block.height + 1 <= height + mature_height {
+                        continue; // skip: not enough mature input
+                    }
+                },
+                _ => continue, // skip: unconfirmed or not found tx
+            }
+            // success
+            unspents.push(PyUnspent { input, output });
+            // loop limit
+            match limit.checked_sub(1) {
+                Some(new_limit) => limit = new_limit,
+                None => break,
+            }
+        }
+        unspents.shrink_to_fit();
+        (unspents, total)
     }
 
     fn list_account_movement(&self, page: usize, size: usize) -> PyResult<Vec<PyMovement>> {

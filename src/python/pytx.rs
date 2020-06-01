@@ -10,7 +10,7 @@ use crate::utils::*;
 use bigint::U256;
 use pyo3::exceptions::{AssertionError, IndexError, ValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple, PyType};
 use pyo3::PyIterProtocol;
 
 type Address = [u8; 21];
@@ -221,15 +221,29 @@ impl PyTxOutputs {
             .to_object(py)
     }
 
-    fn add(&mut self, addr: &PyBytes, coin_id: u32, amount: u64) -> PyResult<()> {
+    fn add(&mut self, addr: PyRef<PyAddress>, coin_id: u32, amount: u64) -> PyResult<()> {
         if 255 <= self.outputs.len() {
             Err(ValueError::py_err("output size is limit to 255u8"))
         } else {
-            let mut slice = [0u8; 21];
-            write_slice(&mut slice, addr.as_bytes());
-            let output = TxOutput(slice, coin_id, amount);
+            let output = TxOutput(addr.addr, coin_id, amount);
             self.outputs.push(output);
             Ok(())
+        }
+    }
+
+    fn replace(&mut self, index: usize, addr: PyRef<PyAddress>, coin_id: u32, amount: u64) -> PyResult<()> {
+        match self.outputs.get_mut(index) {
+            Some(output) => {
+                output.0 = addr.addr;
+                output.1 = coin_id;
+                output.2 = amount;
+                Ok(())
+            },
+            None => Err(IndexError::py_err(format!(
+                "out of bounds index={} len={}",
+                index,
+                self.outputs.len()
+            ))),
         }
     }
 
@@ -392,6 +406,78 @@ impl PyTx {
     fn hash(&self, py: Python) -> PyObject {
         let hash = self.clone_to_body(py).hash();
         PyBytes::new(py, hash.as_ref()).to_object(py)
+    }
+
+    #[classmethod]
+    fn from_bytes(_cls: &PyType, py: Python, binary: &PyBytes) -> PyResult<Self> {
+        let body = TxBody::from_bytes(binary.as_bytes()).map_err(|err| ValueError::py_err(err))?;
+        let inputs = PyCell::new(py, PyTxInputs {
+            iter_index: None,
+            inputs: body.inputs,
+        })
+        .map_err(|err| ValueError::py_err(err))?;
+        let outputs = PyCell::new(py, PyTxOutputs {
+            iter_index: None,
+            outputs: body.outputs,
+        })
+        .map_err(|err| ValueError::py_err(err))?;
+        Ok(PyTx {
+            version: body.version,
+            txtype: body.txtype,
+            time: body.time,
+            deadline: body.deadline,
+            inputs: inputs.into(),
+            outputs: outputs.into(),
+            gas_price: body.gas_price,
+            gas_amount: body.gas_amount,
+            message: body.message,
+            signature: None,
+            inputs_cache: None,
+            verified_list: None,
+            create_time: get_current_time(),
+        })
+    }
+
+    fn to_bytes(&self, py: Python) -> PyObject {
+        let body = self.clone_to_body(py);
+        let bytes = body.to_bytes();
+        PyBytes::new(py, bytes.as_slice()).to_object(py)
+    }
+
+    #[classmethod]
+    fn template_for_staking(
+        _cls: &PyType,
+        py: Python,
+        version: u32,
+        unspent: PyRef<PyUnspent>,
+    ) -> PyResult<Self> {
+        // template coinbase for staking
+        // note: update time, deadline, outputs' amount once a 1 sec
+        let input = unspent.input.clone();
+        let output = unspent.output.clone();
+        let inputs = PyCell::new(py, PyTxInputs {
+            iter_index: None,
+            inputs: vec![input],
+        })?;
+        let outputs = PyCell::new(py, PyTxOutputs {
+            iter_index: None,
+            outputs: vec![output],
+        })?;
+        Ok(PyTx {
+            version,
+            txtype: TxType::PoS,
+            time: 0,
+            deadline: 0,
+            inputs: inputs.into(),
+            outputs: outputs.into(),
+            gas_price: 0,
+            gas_amount: 0,
+            message: TxMessage::Nothing,
+            signature: None,
+            inputs_cache: Some(vec![unspent.output.clone()]),
+            verified_list: None,
+            create_time: get_current_time(),
+        })
     }
 
     #[getter]

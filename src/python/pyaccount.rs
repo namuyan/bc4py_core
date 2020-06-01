@@ -2,7 +2,7 @@ use crate::balance::*;
 use crate::utils::u256_to_bytes;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
-use pyo3::PyIterProtocol;
+use pyo3::{PyIterProtocol, PyNumberProtocol, PyObjectProtocol};
 
 #[pyclass]
 pub struct PyBalance {
@@ -52,11 +52,59 @@ impl PyBalance {
         self.add_amount(coin_id, amount * -1);
     }
 
-    fn marge_balance(&mut self, balance: PyRef<PyBalance>) {
-        for balance in balance.balance.0.iter() {
+    fn add_balance(&mut self, other: PyRef<PyBalance>) {
+        // self += other
+        for balance in other.balance.0.iter() {
             self.balance.add_balance(&balance);
         }
-        self.balance.compaction();
+    }
+
+    fn sub_balance(&mut self, other: PyRef<PyBalance>) {
+        // self -= other
+        for balance in other.balance.0.iter() {
+            self.balance.sub_balance(&balance);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        // check all balances is zero
+        self.balance.is_empty()
+    }
+
+    fn is_all_plus(&self) -> bool {
+        // check all balances is plus or zero
+        self.balance.0.iter().all(|balance| 0 <= balance.amount)
+    }
+}
+
+#[pyproto]
+impl PyNumberProtocol for PyBalance {
+    fn __add__(lhs: &PyAny, rhs: &PyAny) -> PyResult<PyBalance> {
+        // create new object: left + right
+        let cell: &PyCell<PyBalance> = lhs.extract()?;
+        let mut left = cell.borrow().balance.clone();
+        let cell: &PyCell<PyBalance> = rhs.extract()?;
+        for right in cell.borrow().balance.0.iter() {
+            left.add_balance(right);
+        }
+        Ok(PyBalance {
+            iter_index: None,
+            balance: left,
+        })
+    }
+
+    fn __sub__(lhs: &PyAny, rhs: &PyAny) -> PyResult<PyBalance> {
+        // create new object: left - right
+        let cell: &PyCell<PyBalance> = lhs.extract()?;
+        let mut left = cell.borrow().balance.clone();
+        let cell: &PyCell<PyBalance> = rhs.extract()?;
+        for right in cell.borrow().balance.0.iter() {
+            left.sub_balance(right);
+        }
+        Ok(PyBalance {
+            iter_index: None,
+            balance: left,
+        })
     }
 }
 
@@ -85,6 +133,13 @@ impl PyIterProtocol for PyBalance {
                 Ok(None)
             },
         }
+    }
+}
+
+#[pyproto]
+impl PyObjectProtocol for PyBalance {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("{:?}", self.balance))
     }
 }
 

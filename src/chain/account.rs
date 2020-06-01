@@ -389,11 +389,23 @@ impl AccountBuilder {
         }
     }
 
-    pub fn get_path_from_addr(&self, addr: &Address) -> Option<(u32, bool, u32)> {
+    pub fn get_account_mut(&mut self, account_id: u32) -> Result<&mut Account, String> {
+        match self
+            .accounts
+            .iter_mut()
+            .find(|_account| _account.account_id == account_id)
+        {
+            Some(account) => Ok(account),
+            None => Err(format!("not found account_id {}", account_id)),
+        }
+    }
+
+    pub fn get_path_from_addr(&self, addr: &Address) -> Option<(u32, u32, u32)> {
         // return (account_id, is_inner, index)
         for account in self.accounts.iter() {
             match account.get_address_path(addr) {
                 Some((is_inner, index)) => {
+                    let is_inner = if is_inner { 1 } else { 0 };
                     return Some((account.account_id, is_inner, index));
                 },
                 None => continue,

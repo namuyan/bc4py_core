@@ -1,4 +1,5 @@
 use crate::block::*;
+use crate::python::pychain::PyChain;
 use crate::python::pytx::PyTx;
 use crate::tx::{BlockTxs, TxVerifiable};
 use crate::utils::*;
@@ -277,11 +278,57 @@ impl PyTxs {
         })
     }
 
+    fn pop(&mut self, py: Python) -> PyResult<PyObject> {
+        // remove last item or raise IndexError
+        let result = match &mut self.txs {
+            PyTxsEnum::Hashs(vec) => vec.pop().map(|hash| u256_to_bytes(&hash).to_object(py)),
+            PyTxsEnum::Objects(vec) => vec.pop().map(|obj| obj.to_object(py)),
+        };
+        match result {
+            Some(obj) => Ok(obj),
+            None => Err(IndexError::py_err(format!(
+                "pop from empty {} list",
+                self.typename()
+            ))),
+        }
+    }
+
     fn get_hash_list(&self, py: Python) -> Vec<PyObject> {
         self.hash_list(py)
             .iter()
             .map(|hash| PyBytes::new(py, u256_to_bytes(hash).as_ref()).to_object(py))
             .collect()
+    }
+
+    fn convert_object_type(&mut self, py: Python, chain: PyRef<PyChain>) -> PyResult<()> {
+        // hash type to object type
+        let chain = chain.lock();
+        let new = match &self.txs {
+            PyTxsEnum::Hashs(vec) => {
+                // note: hash must be unconfirmed only ( cannot read from txcache)
+                let mut new = Vec::with_capacity(vec.len());
+                for hash in vec.iter() {
+                    match chain.tables.read_txcache(hash).unwrap() {
+                        Some(tx) => {
+                            new.push(Py::new(py, PyTx::from_verifiable(py, tx)?)?);
+                        },
+                        None => {
+                            return Err(ValueError::py_err(format!(
+                                "cannot convert hash to object because not found in txcache hash={}",
+                                u256_to_hex(hash)
+                            )))
+                        },
+                    }
+                }
+                // success
+                new
+            },
+            // skip: already object type
+            PyTxsEnum::Objects(_) => return Ok(()),
+        };
+        // over write
+        self.txs = PyTxsEnum::Objects(new);
+        Ok(())
     }
 }
 
@@ -340,7 +387,7 @@ pub struct PyBlock {
     #[pyo3(get)]
     pub height: u32,
     pub flag: BlockFlag,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     pub bias: f32,
 
     // header (not static)
@@ -433,7 +480,7 @@ impl PyBlock {
     }
 
     #[classmethod]
-    fn from_binary(
+    fn from_bytes(
         _cls: &PyType,
         height: u32,
         flag: u8,
@@ -460,6 +507,12 @@ impl PyBlock {
                 "binary is 80 bytes & txs_hash is 32bytes hash list",
             ))
         }
+    }
+
+    fn to_bytes(&self, py: Python) -> PyObject {
+        // header 80 bytes
+        let bytes = self.header.to_bytes();
+        PyBytes::new(py, bytes.as_ref()).to_object(py)
     }
 
     #[getter]

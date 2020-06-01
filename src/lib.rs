@@ -7,6 +7,7 @@ extern crate num_traits;
 extern crate sha2;
 #[macro_use]
 extern crate lazy_static;
+extern crate remove_dir_all;
 
 pub mod balance;
 pub mod block;

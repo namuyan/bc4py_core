@@ -6,7 +6,7 @@ pub mod unconfirmed;
 pub mod utils;
 
 use crate::balance::Balances;
-use crate::block::Block;
+use crate::block::{Block, BlockFlag};
 use crate::chain::confirmed::BlockHashVec;
 use crate::chain::{
     account::AccountBuilder,
@@ -110,6 +110,7 @@ impl Chain {
         // revert fork (tx: confirmed -> unconfirmed)
         for blockhash in best_chain_before.iter() {
             let fork = self.confirmed.get_block_ref(blockhash).unwrap();
+            assert_ne!(fork.flag, BlockFlag::Genesis, "cannot revert genesis block");
             // note: do not revert coinbase tx
             for txhash in fork.txs_hash.iter().skip(1).rev() {
                 let tx = cur
@@ -236,6 +237,11 @@ impl Chain {
         Ok(self.tables.read_block(hash)?)
     }
 
+    pub fn get_best_block_ref(&self) -> &Block {
+        let hash = self.best_chain.first().unwrap();
+        self.confirmed.get_block_ref(hash).unwrap()
+    }
+
     pub fn get_tx(&self, hash: &U256) -> Result<Option<TxRecoded>, String> {
         // from tables (tx_indexed or account tx)
         let tx = self.tables.read_tx(hash)?;
@@ -251,6 +257,33 @@ impl Chain {
 
         // not found
         Ok(None)
+    }
+
+    pub fn get_tx_height(&self, hash: &U256) -> Result<Option<u32>, String> {
+        // get tx height on chain
+        // note: only account tx or require tx_index flag true
+
+        // from tables (tx_index is true or only account tx)
+        let height = self.tables.read_tx_height(hash);
+        if height.is_ok() {
+            return Ok(height.ok());
+        }
+
+        // from confirmed
+        for blockhash in self.best_chain.iter() {
+            let block = self.confirmed.get_block_ref(blockhash).unwrap();
+            if block.txs_hash.contains(hash) {
+                return Ok(Some(block.height));
+            }
+        }
+
+        // from unconfirmed
+        if self.unconfirmed.have_the_tx(hash) {
+            return Ok(None);
+        }
+
+        // not found tx
+        Err("not found txhash's height on chain".to_owned())
     }
 
     pub fn get_output_of_input(&self, input: &TxInput, ignore: bool) -> Result<Option<TxOutput>, String> {
@@ -350,6 +383,19 @@ impl Chain {
         }
     }
 
+    pub fn get_account_address(&mut self, account_id: u32, new: bool) -> Result<Address, String> {
+        // get new account address
+        let mut cur = self.tables.transaction();
+        match self.account.get_account_mut(account_id) {
+            Ok(account) => {
+                let addr = account.get_new_address(new, &mut cur).unwrap();
+                cur.commit().unwrap();
+                Ok(addr)
+            },
+            Err(err) => Err(err),
+        }
+    }
+
     /// return (confirmed, unconfirmed) balance
     pub fn get_account_balance(&self, account_id: u32, confirm: u32) -> Result<(Balances, Balances), String> {
         // note: incoming is confirmed when `confirm` height passed
@@ -361,8 +407,7 @@ impl Chain {
         let mut unconfirmed = Balances(vec![]);
 
         // from confirmed
-        let best_hash = self.best_chain.first().ok_or("cannot get best_hash".to_owned())?;
-        let best_block = self.confirmed.get_block_ref(best_hash).unwrap();
+        let best_block = self.get_best_block_ref();
         for blockhash in self.best_chain.iter().rev() {
             let block = self.confirmed.get_block_ref(blockhash).unwrap();
             let f_enough_old = block.height <= best_block.height - confirm;

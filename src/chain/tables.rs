@@ -5,10 +5,11 @@ use crate::pickle::*;
 use crate::tx::{BlockTxs, TxBody, TxInput, TxOutput, TxRecoded, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
+use remove_dir_all::remove_dir_all;
 use rocksdb::{DBIterator, Direction, IteratorMode, Options, WriteBatch, WriteOptions, DB};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_reader, to_writer_pretty};
-use std::fs::{create_dir_all, remove_dir_all, File};
+use std::fs::{create_dir_all, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -151,10 +152,10 @@ impl Tables {
 
         // require same table option & status
         if !table_opts.check_config_and_create(dir)? || !table_opts.check_status_and_create(dir)? {
-            // remove
+            // remove by special method on windows
             remove_dir_all(dir).unwrap();
             // sleep 200ms to escape permission deny on windows
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            // std::thread::sleep(std::time::Duration::from_millis(200));
             // recreate
             create_dir_all(dir).unwrap();
             // check
@@ -316,6 +317,15 @@ impl Tables {
                 },
             },
             Err(err) => Err(format!("database exception: {}", err.to_string())),
+        }
+    }
+
+    pub fn read_tx_height(&self, hash: &U256) -> Result<u32, String> {
+        // tx_index: [txhash 32b] -> [height u32][offset u32]
+        let txhash = u256_to_bytes(hash);
+        match self.tx_index.get(txhash.as_ref()).unwrap() {
+            Some(value) => Ok(bytes_to_u32(&value[0..4])),
+            None => Err(format!("not found tx_index of {}", u256_to_hex(hash))),
         }
     }
 
