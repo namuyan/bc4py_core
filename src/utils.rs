@@ -73,7 +73,7 @@ pub fn bytes_to_i64(bytes: &[u8]) -> i64 {
     i64::from_le_bytes(tmp)
 }
 
-#[inline]
+#[cfg(test)]
 pub fn string_to_u256(s: &str) -> U256 {
     assert_eq!(s.len(), 64);
     U256::from(hex::decode(s).unwrap().as_slice())

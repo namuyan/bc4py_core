@@ -20,7 +20,7 @@ struct Confirmed {
 
     // summarize txs
     inputs: Vec<TxInput>,
-    outputs: Vec<TxOutput>,
+    // outputs: Vec<TxOutput>,
 }
 
 impl Confirmed {
@@ -30,17 +30,17 @@ impl Confirmed {
             .expect("already write to table but not found block");
         let score = block.calc_score();
         let mut input_size = 0;
-        let mut output_size = 0;
+        // let mut output_size = 0;
         while let Some(body) = txs.iter().next() {
             input_size += body.inputs.len();
-            output_size += body.outputs.len();
+            // output_size += body.outputs.len();
         }
         let mut inputs = Vec::with_capacity(input_size);
-        let mut outputs = Vec::with_capacity(output_size);
+        // let mut outputs = Vec::with_capacity(output_size);
         let coinbase = txs.0;
         for tx in txs.1.into_iter() {
             inputs.extend(tx.body.inputs.into_iter());
-            outputs.extend(tx.body.outputs.into_iter());
+            // outputs.extend(tx.body.outputs.into_iter());
         }
         Ok(Confirmed {
             hash,
@@ -48,7 +48,7 @@ impl Confirmed {
             score,
             coinbase,
             inputs,
-            outputs,
+            // outputs,
         })
     }
 }

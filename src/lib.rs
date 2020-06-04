@@ -13,9 +13,7 @@ pub mod balance;
 pub mod block;
 pub mod chain;
 pub mod pickle;
-pub mod python;
+mod python;
 pub mod signature;
 pub mod tx;
-pub mod utils;
-
-type StrResult<T> = Result<T, String>;
+mod utils;
