@@ -1,6 +1,7 @@
 use crate::balance::*;
 use crate::block::Block;
 use crate::chain::tables::{TableCursor, Tables};
+use crate::signature::Signature;
 use crate::tx::TxVerifiable;
 use crate::utils::*;
 use hdwallet::traits::{Deserialize, Serialize};
@@ -523,6 +524,34 @@ impl AccountBuilder {
             inner_iter: None,
             outer_iter: None,
         }
+    }
+
+    pub fn get_single_sign_by_addr(&self, addr: &Address, msg: &[u8]) -> Result<Signature, String> {
+        if self.root_key.is_none() {
+            return Err("You can't sign because rootKey is none".to_owned());
+        }
+
+        // derive from rootKey
+        let key = match self.get_path_from_addr(addr) {
+            Some((account_id, is_inner, index)) => self
+                .root_key
+                .as_ref()
+                .unwrap()
+                .derive_private_key(KeyIndex::Hardened(BIP32_HARDEN + account_id))
+                .expect("cannot derive from accountId?")
+                .derive_private_key(KeyIndex::Normal(is_inner))
+                .expect("cannot derive from innerFlag?")
+                .derive_private_key(KeyIndex::Normal(index))
+                .expect("cannot derive from addrIndex?"),
+            None => return Err(format!("{} isn't account address", hex::encode(addr))),
+        };
+
+        // sign by params
+        let sk: &[u8] = &key.private_key[..];
+        let pk = ExtendedPubKey::from_private_key(&key).public_key.serialize();
+
+        // success
+        Signature::get_single_sign(sk, &pk, msg)
     }
 
     fn expand_account_capacity(&mut self) -> Result<(), Error> {

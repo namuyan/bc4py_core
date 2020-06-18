@@ -13,9 +13,12 @@ type Address = [u8; 21];
 
 #[derive(Clone)]
 pub enum Signature {
-    SingleSig((POINT, SCALAR, SCALAR)),    // (pk, r, s)
-    AggregateSig((POINT, SCALAR, SCALAR)), // (apk, r, s)
-    ThresholdSig((POINT, POINT, SCALAR)),  // (Y, V, sigma)
+    /// 1 of 1 (pk, r, s)
+    SingleSig((POINT, SCALAR, SCALAR)),
+    /// n of n (apk, r, s)
+    AggregateSig((POINT, SCALAR, SCALAR)),
+    /// n of m (Y, V, sigma)
+    ThresholdSig((POINT, POINT, SCALAR)),
 }
 
 impl fmt::Debug for Signature {
@@ -113,6 +116,16 @@ impl Signature {
             Signature::ThresholdSig(a) => a.0,
         };
         sha256ripemd160(ver, &pk)
+    }
+
+    /// get 1 of 1 signature
+    pub fn get_single_sign(sk: &[u8], pk: &POINT, msg: &[u8]) -> Result<Self, String> {
+        let mut tmp = [0u8; 32];
+        tmp.clone_from_slice(sk);
+        match aggregate::sign_aggregate(&tmp, msg) {
+            Ok((r, s)) => Ok(Signature::SingleSig((pk.clone(), r, s))),
+            Err(err) => Err(err.to_string()),
+        }
     }
 }
 

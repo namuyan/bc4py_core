@@ -40,17 +40,76 @@ pub fn verify_aggregate(pk: &POINT, r: &SCALAR, s: &SCALAR, message: &[u8]) -> R
     Ok(&minus_point.serialize()[1..33] == r.as_ref())
 }
 
+/// generate 1 of 1 signature
+/// designed for PoS/PoC mining validator
+#[allow(non_snake_case)]
+pub fn sign_aggregate(sk: &SCALAR, message: &[u8]) -> Result<(SCALAR, SCALAR), Error> {
+    // calc: k = int(hash(bytes(d) || m)) mod n
+    let mut vec = Vec::with_capacity(32 + 32);
+    vec.extend_from_slice(sk.as_ref());
+    vec.extend_from_slice(message);
+    let hashed = Sha256::digest(&vec);
+    let mut k = SecretKey::from_slice(&hashed)?;
+
+    // calc: R = kG = k * G
+    let mut R = generator();
+    scalar_mul(&mut R, &k)?;
+
+    // if jacobi(y(R)) ≠ 1
+    if !is_jacobi(&R) {
+        // over write: k = n - k
+        k = inv_scalar(&k)?;
+    }
+
+    // calc: dG = sk * G
+    let mut dG = generator();
+    raw_scalar_mul(&mut dG, sk.as_ref())?;
+
+    // calc: e = int(hash(bytes(x(R)) || bytes(dG) || m)) mod n
+    vec.clear();
+    vec.extend_from_slice(&R.serialize()[1..33]);
+    vec.extend_from_slice(dG.serialize().as_ref());
+    vec.extend_from_slice(message);
+    let hashed = Sha256::digest(&vec);
+    let mut e = SecretKey::from_slice(&hashed)?;
+
+    // calc: sign(r) = x(R)
+    let mut r: SCALAR = [0u8; 32];
+    r.clone_from_slice(&R.serialize()[1..33]);
+
+    // calc: sign(s) = k + e * sk mod n
+    e.mul_assign(sk.as_ref())?;
+    k.add_assign(&e[..])?;
+    let mut s: SCALAR = [0u8; 32];
+    s.clone_from_slice(&k[..]);
+
+    // success
+    Ok((r, s))
+}
+
 /// https://github.com/guggero/bip-schnorr/blob/master/test/test-vectors-schnorr.json
 /// aggregate single-sig check vectors
 #[cfg(test)]
 mod single_verify {
+    use crate::signature::aggregate::sign_aggregate;
     use crate::signature::{verify_signature, Signature};
     use secp256k1::Error;
+
+    /// params to signature object
+    fn sign(sk: &[u8], pk: &[u8], msg: &[u8]) -> Signature {
+        let mut tmp = [0u8; 32];
+        tmp.clone_from_slice(sk);
+        let (r, s) = sign_aggregate(&tmp, msg).unwrap();
+        let mut tmp = [0u8; 33];
+        tmp.clone_from_slice(pk);
+        Signature::SingleSig((tmp, r, s))
+    }
+
     #[test]
     fn vector_0() {
         // comment: None
         // expectedError: None
-        let _sk = hex::decode("0000000000000000000000000000000000000000000000000000000000000001").unwrap();
+        let sk = hex::decode("0000000000000000000000000000000000000000000000000000000000000001").unwrap();
         let pk = hex::decode("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798").unwrap();
         let msg = hex::decode("0000000000000000000000000000000000000000000000000000000000000000").unwrap();
         let r = hex::decode("787A848E71043D280C50470E8E1532B2DD5D20EE912A45DBDD2BD1DFBF187EF6").unwrap(); // r
@@ -58,13 +117,14 @@ mod single_verify {
 
         let signature = Signature::new_single_sig(&pk, &r, &s).unwrap();
         assert_eq!(verify_signature(&signature, &msg), Ok(true));
+        assert_eq!(sign(&sk, &pk, &msg), signature);
     }
 
     #[test]
     fn vector_1() {
         // comment: None
         // expectedError: None
-        let _sk = hex::decode("B7E151628AED2A6ABF7158809CF4F3C762E7160F38B4DA56A784D9045190CFEF").unwrap();
+        let sk = hex::decode("B7E151628AED2A6ABF7158809CF4F3C762E7160F38B4DA56A784D9045190CFEF").unwrap();
         let pk = hex::decode("02DFF1D77F2A671C5F36183726DB2341BE58FEAE1DA2DECED843240F7B502BA659").unwrap();
         let msg = hex::decode("243F6A8885A308D313198A2E03707344A4093822299F31D0082EFA98EC4E6C89").unwrap();
         let r = hex::decode("2A298DACAE57395A15D0795DDBFD1DCB564DA82B0F269BC70A74F8220429BA1D").unwrap(); // r
@@ -72,13 +132,14 @@ mod single_verify {
 
         let signature = Signature::new_single_sig(&pk, &r, &s).unwrap();
         assert_eq!(verify_signature(&signature, &msg), Ok(true));
+        assert_eq!(sign(&sk, &pk, &msg), signature);
     }
 
     #[test]
     fn vector_2() {
         // comment: None
         // expectedError: None
-        let _sk = hex::decode("C90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B14E5C7").unwrap();
+        let sk = hex::decode("C90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B14E5C7").unwrap();
         let pk = hex::decode("03FAC2114C2FBB091527EB7C64ECB11F8021CB45E8E7809D3C0938E4B8C0E5F84B").unwrap();
         let msg = hex::decode("5E2D58D8B3BCDF1ABADEC7829054F90DDA9805AAB56C77333024B9D0A508B75C").unwrap();
         let r = hex::decode("00DA9B08172A9B6F0466A2DEFD817F2D7AB437E0D253CB5395A963866B3574BE").unwrap(); // r
@@ -86,13 +147,14 @@ mod single_verify {
 
         let signature = Signature::new_single_sig(&pk, &r, &s).unwrap();
         assert_eq!(verify_signature(&signature, &msg), Ok(true));
+        assert_eq!(sign(&sk, &pk, &msg), signature);
     }
 
     #[test]
     fn vector_3() {
         // comment: None
         // expectedError: None
-        let _sk = hex::decode("6D6C66873739BC7BFB3526629670D0EA357E92CC4581490D62779AE15F6B787B").unwrap();
+        let sk = hex::decode("6D6C66873739BC7BFB3526629670D0EA357E92CC4581490D62779AE15F6B787B").unwrap();
         let pk = hex::decode("026D7F1D87AB3BBC8BC01F95D9AECE1E659D6E33C880F8EFA65FACF83E698BBBF7").unwrap();
         let msg = hex::decode("B2F0CD8ECB23C1710903F872C31B0FD37E15224AF457722A87C5E0C7F50FFFB3").unwrap();
         let r = hex::decode("68CA1CC46F291A385E7C255562068357F964532300BEADFFB72DD93668C0C1CA").unwrap(); // r
@@ -100,6 +162,7 @@ mod single_verify {
 
         let signature = Signature::new_single_sig(&pk, &r, &s).unwrap();
         assert_eq!(verify_signature(&signature, &msg), Ok(true));
+        assert_eq!(sign(&sk, &pk, &msg), signature);
     }
 
     #[test]

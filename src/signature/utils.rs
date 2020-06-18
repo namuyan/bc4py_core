@@ -40,6 +40,11 @@ pub fn scalar_mul(point: &mut PublicKey, fe: &SecretKey) -> Result<(), Error> {
     point.mul_assign(get_context(), &fe[..])
 }
 
+/// POINT * SCALAR(slice)
+pub fn raw_scalar_mul(point: &mut PublicKey, fe: &[u8]) -> Result<(), Error> {
+    point.mul_assign(get_context(), fe)
+}
+
 /// POINT - POINT
 pub fn sub_point(point: &PublicKey, other: &PublicKey) -> Result<PublicKey, Error> {
     let p = BigUint::from_bytes_be(&P);
@@ -59,6 +64,13 @@ pub fn sub_point(point: &PublicKey, other: &PublicKey) -> Result<PublicKey, Erro
 
     let minus_point = PublicKey::from_slice(&tmp)?;
     point.combine(&minus_point)
+}
+
+/// invert secret key (N - sk)
+pub fn inv_scalar(secret: &SecretKey) -> Result<SecretKey, Error> {
+    let sk = BigUint::from_bytes_be(&secret[..]);
+    let n = BigUint::from_bytes_be(N.as_ref());
+    SecretKey::from_slice(&n.sub(sk).to_bytes_be())
 }
 
 /// https://github.com/sipa/bips/blob/bip-schnorr/bip-schnorr.mediawiki#verification
