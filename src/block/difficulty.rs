@@ -166,7 +166,7 @@ impl DifficultyBuilder {
         previous_hash: &U256,
         flag: &BlockFlag,
         tables: &Tables,
-    ) -> Result<f64, String> {
+    ) -> Result<f32, String> {
         let N = 30u32; // target blocks
 
         // genesis block is exception
@@ -225,7 +225,7 @@ impl DifficultyBuilder {
         } else if others_best.len() == 0 {
             // = BASE_TARGET * target_cnt / target_sum
             // = double(MAX * target_cnt / target_sum) / 0x100000000
-            Ok((*MAX * U512::from(target_cnt) / target_sum).as_u64() as f64 / 4294967296f64)
+            Ok((*MAX * U512::from(target_cnt) / target_sum).as_u64() as f32 / 4294967296f32)
         } else {
             // = average_target * target_cnt / target_sum
             // = double(average_target * target_cnt / target_sum * 0x100000000) / 0x100000000
@@ -235,7 +235,7 @@ impl DifficultyBuilder {
             }
             average_target = average_target / U512::from(others_best.len());
             let int = average_target * U512::from(target_cnt) / target_sum * U512::from(0x100000000u64);
-            Ok(int.as_u64() as f64 / 4294967296f64)
+            Ok(int.as_u64() as f32 / 4294967296f32)
         }
     }
 

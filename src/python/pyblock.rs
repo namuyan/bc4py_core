@@ -1,11 +1,11 @@
 use crate::block::*;
 use crate::python::pychain::PyChain;
 use crate::python::pytx::PyTx;
-use crate::tx::{BlockTxs, TxVerifiable};
+use crate::tx::{BlockTxs, TxBody, TxOutput, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 use pyo3::basic::CompareOp;
-use pyo3::exceptions::{IndexError, ValueError};
+use pyo3::exceptions::{AssertionError, IndexError, ValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyType};
 use pyo3::{PyIterProtocol, PyObjectProtocol};
@@ -438,7 +438,7 @@ impl PyBlock {
         // auto calc merkleroot hash
         let merkleroot = if 0 < txs.len() {
             let hashs = txs.hash_list(py);
-            utils::calc_merkleroot_hash(hashs).map_err(|err| ValueError::py_err(err))?
+            calc_merkleroot_hash(hashs)
         } else {
             U256::from(0u32) // dummy hash
         };
@@ -515,26 +515,28 @@ impl PyBlock {
         PyBytes::new(py, bytes.as_ref()).to_object(py)
     }
 
-    #[getter]
-    fn get_work_hash(&self, py: Python) -> Option<PyObject> {
-        match self.work_hash.as_ref() {
-            Some(hash) => {
-                let hash = u256_to_bytes(&hash);
-                Some(PyBytes::new(py, hash.as_ref()).to_object(py))
-            },
-            None => None,
+    fn get_work_hash(&mut self, py: Python, update: bool) -> PyResult<PyObject> {
+        // generate workHash if required
+        if self.work_hash.is_none() || update {
+            let work = match &self.flag {
+                BlockFlag::CoinPos | BlockFlag::CapPos | BlockFlag::FlkPos => {
+                    let (inputs_cache, coinbase) = self.get_coinbase_inputs_cache(py)?;
+                    let input_cache = inputs_cache.get(0);
+                    // return Err if input's length is zero
+                    get_work_hash(&self.flag, &self.header, Some(&coinbase), input_cache)
+                },
+                _others => get_work_hash(&self.flag, &self.header, None, None),
+            };
+            match work {
+                Ok(hash) => self.work_hash.replace(hash),
+                Err(err) => return Err(AssertionError::py_err(err)),
+            };
         }
-    }
 
-    #[setter]
-    fn set_work_hash(&mut self, hash: &PyBytes) -> PyResult<()> {
-        let hash = hash.as_bytes();
-        if hash.len() == 32 {
-            self.work_hash = Some(U256::from(hash));
-            Ok(())
-        } else {
-            Err(ValueError::py_err("work_hash isn't 32 bytes"))
-        }
+        // return generated workHash
+        let hash = self.work_hash.as_ref().unwrap();
+        let hash = u256_to_bytes(&hash);
+        Ok(PyBytes::new(py, hash.as_ref()).to_object(py))
     }
 
     #[getter]
@@ -605,12 +607,13 @@ impl PyBlock {
         let txs: &PyCell<PyTxs> = self.txs.as_ref(py);
         let hashs = txs.borrow().hash_list(py);
 
-        // calc merkleroot
-        let hash = utils::calc_merkleroot_hash(hashs)
-            .map_err(|_err| ValueError::py_err(format!("calc merkleroot hash is failed: {}", _err)))?;
+        // not allow empty hashs
+        if hashs.len() == 0 {
+            return Err(AssertionError::py_err("not allow empty hashs to calc merkleroot"));
+        }
 
-        // success
-        self.header.merkleroot = hash;
+        // calc merkleroot
+        self.header.merkleroot = calc_merkleroot_hash(hashs);
         Ok(())
     }
 
@@ -817,61 +820,27 @@ impl PyBlock {
             },
         }
     }
-}
 
-mod utils {
-    use crate::utils::sha256double;
-    use bigint::U256;
-
-    pub fn calc_merkleroot_hash(mut hashs: Vec<U256>) -> Result<U256, String> {
-        let mut buf = [0u8; 64];
-        let mut new_hashs = Vec::with_capacity(hashs.len() / 2);
-        while 1 < hashs.len() {
-            if hashs.len() % 2 == 0 {
-                new_hashs.clear();
-                for i in 0..(hashs.len() / 2) {
-                    hashs[i * 2].to_big_endian(&mut buf[0..32]);
-                    hashs[i * 2 + 1].to_big_endian(&mut buf[32..64]);
-                    let hash = sha256double(buf.as_ref());
-                    new_hashs.push(U256::from(hash.as_slice()));
-                }
-                // swap
-                hashs = new_hashs.clone();
-            } else {
-                let last = match hashs.last() {
-                    Some(hash) => hash.clone(),
-                    None => return Err("hashs length may be zero".to_owned()),
-                };
-                hashs.push(last);
-            }
+    /// get coinbase info for PoS type verification
+    ///
+    /// return (inputsCache, coinbase)
+    fn get_coinbase_inputs_cache(&self, py: Python) -> PyResult<(Vec<TxOutput>, TxBody)> {
+        let cell: &PyCell<PyTxs> = self.txs.as_ref(py);
+        match &cell.borrow().txs {
+            PyTxsEnum::Hashs(_) => Err(AssertionError::py_err("try to get coinbase but PyTxs is hash")),
+            PyTxsEnum::Objects(vec) => match vec.get(0) {
+                Some(coinbase) => {
+                    let cell: &PyCell<PyTx> = coinbase.as_ref(py);
+                    let coinbase = cell.borrow();
+                    match &coinbase.inputs_cache {
+                        Some(cache) => Ok((cache.clone(), coinbase.clone_to_body(py))),
+                        None => Err(AssertionError::py_err(
+                            "try to get coinbase but inputs_cache is empty",
+                        )),
+                    }
+                },
+                None => Err(AssertionError::py_err("try to get coinbase but tx is empty")),
+            },
         }
-        // check
-        match hashs.pop() {
-            Some(hash) => Ok(hash),
-            None => Err("hashs length may be zero".to_owned()),
-        }
-    }
-
-    /// for test case only
-    #[allow(dead_code)]
-    fn hex_to_u256_reversed(s: &str) -> U256 {
-        // Bitcoin's block & tx hash is looks reversed because they want work hash starts with zeros
-        let mut vec = hex::decode(s).unwrap();
-        vec.reverse();
-        U256::from(vec.as_slice())
-    }
-
-    #[test]
-    fn test_merkleroot_hash() {
-        // https://btc.com/000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506
-        let hashs = vec![
-            hex_to_u256_reversed("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87"),
-            hex_to_u256_reversed("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4"),
-            hex_to_u256_reversed("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4"),
-            hex_to_u256_reversed("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d"),
-        ];
-        let merkleroot =
-            hex_to_u256_reversed("f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766");
-        assert_eq!(calc_merkleroot_hash(hashs), Ok(merkleroot));
     }
 }

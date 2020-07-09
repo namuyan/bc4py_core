@@ -103,3 +103,60 @@ pub fn get_current_time() -> f64 {
     let duration = now.duration_since(UNIX_EPOCH).unwrap();
     duration.as_secs_f64()
 }
+
+/// calculate merkleroot hash
+///
+/// panic if you input empty hashs
+pub fn calc_merkleroot_hash(mut hashs: Vec<U256>) -> U256 {
+    assert!(0 < hashs.len());
+    let mut buf = [0u8; 64];
+    let mut new_hashs = Vec::with_capacity(hashs.len() / 2);
+    while 1 < hashs.len() {
+        if hashs.len() % 2 == 0 {
+            new_hashs.clear();
+            for i in 0..(hashs.len() / 2) {
+                hashs[i * 2].to_big_endian(&mut buf[0..32]);
+                hashs[i * 2 + 1].to_big_endian(&mut buf[32..64]);
+                let hash = sha256double(buf.as_ref());
+                new_hashs.push(U256::from(hash.as_slice()));
+            }
+            // swap
+            hashs = new_hashs.clone();
+        } else {
+            let last = hashs.last().unwrap().clone();
+            hashs.push(last);
+        }
+    }
+    // check
+    hashs.pop().unwrap()
+}
+
+#[allow(unused_imports)]
+#[cfg(test)]
+mod utils {
+    use crate::utils::calc_merkleroot_hash;
+    use bigint::U256;
+
+    /// for test case only
+    #[allow(dead_code)]
+    fn hex_to_u256_reversed(s: &str) -> U256 {
+        // Bitcoin's block & tx hash is looks reversed because they want work hash starts with zeros
+        let mut vec = hex::decode(s).unwrap();
+        vec.reverse();
+        U256::from(vec.as_slice())
+    }
+
+    #[test]
+    fn test_merkleroot_hash() {
+        // https://btc.com/000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506
+        let hashs = vec![
+            hex_to_u256_reversed("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87"),
+            hex_to_u256_reversed("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4"),
+            hex_to_u256_reversed("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4"),
+            hex_to_u256_reversed("e9a66845e05d5abc0ad04ec80f774a7e585c6e8db975962d069a522137b80c1d"),
+        ];
+        let merkleroot =
+            hex_to_u256_reversed("f3e94742aca4b5ef85488dc37c06c3282295ffec960994b2c0d5ac2a25a95766");
+        assert_eq!(calc_merkleroot_hash(hashs), merkleroot);
+    }
+}

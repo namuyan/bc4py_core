@@ -1,24 +1,56 @@
+use crate::block::{
+    bits_to_target,
+    target_to_bits,
+    target_to_diff,
+    BlockFlag,
+    DifficultyBuilder,
+    GenerateBuilder,
+    PocWorker,
+    PosWorker,
+    PowWorker,
+    RewardBuilder,
+};
 use crate::python::pyblock::{PyBlock, PyTxs};
 use crate::python::pychain::{PyChain, SharedChain};
 use crate::python::pytx::PyTxInputs;
+use crate::utils::u256_to_bytes;
 use bigint::U256;
 use pyo3::exceptions::{AssertionError, ValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::path::Path;
 
 /// Block & Tx validation methods
 #[pyclass]
 pub struct PyValidate {
     chain: SharedChain,
+    /// block reward calculator
+    reward: RewardBuilder,
+    /// bits & bias calculator
+    diff: DifficultyBuilder,
+    /// mining block generator
+    gene: GenerateBuilder,
+    /// temporary workers info while generating
+    tmp_info: Option<Vec<String>>,
 }
 
 #[pymethods]
 impl PyValidate {
     #[new]
-    fn new(chain: PyRef<PyChain>) -> Self {
-        PyValidate {
-            chain: chain.clone_chain(),
+    fn new(chain: PyRef<PyChain>, total_supply: u64, params: &PyAny) -> PyResult<Self> {
+        let vec: Vec<(u8, u32, u32, u32)> = params.extract()?;
+        let mut params = Vec::with_capacity(vec.len());
+        for p in vec {
+            let flag = BlockFlag::from_int(p.0).map_err(|err| ValueError::py_err(err))?;
+            params.push((flag, p.1, p.2, p.3));
         }
+        Ok(PyValidate {
+            chain: chain.clone_chain(),
+            reward: RewardBuilder::new(total_supply),
+            diff: DifficultyBuilder::new(params),
+            gene: GenerateBuilder::new(),
+            tmp_info: None,
+        })
     }
 
     fn is_unconfirmed(&self, hash: &PyBytes) -> PyResult<bool> {
@@ -177,7 +209,129 @@ impl PyValidate {
     fn get_best_unconfirmed(&self, maxsize: u32) -> PyTxs {
         // get size limited unconfirmed tx's list
         let chain = self.chain.lock().unwrap();
-        let hashs = chain.unconfirmed.get_size_limit_list(maxsize);
-        PyTxs::from_hash_vec(hashs)
+        let hashs = chain.unconfirmed.get_best_unconfirmed_list(maxsize);
+        PyTxs::from_hash_vec(hashs.txs)
+    }
+
+    fn calc_next_bits(&mut self, previous_hash: &PyBytes, flag: u8) -> PyResult<u32> {
+        let previous_hash = previous_hash.as_bytes();
+        if previous_hash.len() != 32 {
+            return Err(ValueError::py_err("previous_hash is 32 bytes"));
+        }
+        let previous_hash = U256::from(previous_hash);
+        let flag = BlockFlag::from_int(flag).map_err(|err| ValueError::py_err(err))?;
+        let chain = self.chain.lock().unwrap();
+        // get next bits from previous info
+        self.diff
+            .calc_next_bits(&previous_hash, &flag, &chain.tables)
+            .map_err(|err| ValueError::py_err(err))
+    }
+
+    fn calc_next_bias(&mut self, previous_hash: &PyBytes, flag: u8) -> PyResult<f32> {
+        let previous_hash = previous_hash.as_bytes();
+        if previous_hash.len() != 32 {
+            return Err(ValueError::py_err("previous_hash is 32 bytes"));
+        }
+        let previous_hash = U256::from(previous_hash);
+        let flag = BlockFlag::from_int(flag).map_err(|err| ValueError::py_err(err))?;
+        let chain = self.chain.lock().unwrap();
+        // get next bias from previous info
+        self.diff
+            .calc_next_bias(&previous_hash, &flag, &chain.tables)
+            .map_err(|err| ValueError::py_err(err))
+    }
+
+    #[staticmethod]
+    fn bits_to_target(py: Python, bits: u32) -> PyResult<PyObject> {
+        match bits_to_target(bits) {
+            Ok(target) => Ok(PyBytes::new(py, u256_to_bytes(&target).as_ref()).to_object(py)),
+            Err(err) => Err(ValueError::py_err(format!("cannot bits to target by: {}", err))),
+        }
+    }
+
+    #[staticmethod]
+    fn target_to_bits(target: &PyBytes) -> PyResult<u32> {
+        let target = target.as_bytes();
+        if target.len() != 32 {
+            return Err(ValueError::py_err("target is 32 bytes"));
+        }
+        let target = U256::from(target);
+        Ok(target_to_bits(&target))
+    }
+
+    #[staticmethod]
+    fn target_to_diff(target: &PyBytes) -> PyResult<f64> {
+        let target = target.as_bytes();
+        if target.len() != 32 {
+            return Err(ValueError::py_err("target is 32 bytes"));
+        }
+        let target = U256::from(target);
+        Ok(target_to_diff(target))
+    }
+
+    fn calc_block_reward(&self, height: u32) -> u64 {
+        self.reward.calc_block_reward(height)
+    }
+
+    fn calc_total_supply(&self, height: u32) -> u64 {
+        self.reward.calc_total_supply(height)
+    }
+
+    fn get_worker_info(&self) -> Vec<String> {
+        match &self.tmp_info {
+            None => self.gene.get_worker_info(),
+            Some(info) => info.clone(),
+        }
+    }
+
+    fn push_pow_worker(&mut self, flag: u8, power_limit: u8, block_ver: u32, tx_ver: u32) -> PyResult<()> {
+        let flag = BlockFlag::from_int(flag).map_err(|err| AssertionError::py_err(err))?;
+        let worker = PowWorker::new(&flag, power_limit, block_ver, tx_ver);
+        self.gene
+            .push_worker(worker)
+            .map_err(|err| ValueError::py_err(err))?;
+        Ok(())
+    }
+
+    fn push_pos_worker(&mut self) -> PyResult<()> {
+        let worker = PosWorker::new();
+        self.gene
+            .push_worker(worker)
+            .map_err(|err| ValueError::py_err(err))?;
+        Ok(())
+    }
+
+    fn push_poc_worker(&mut self, dirs: Vec<String>) -> PyResult<()> {
+        let dirs = dirs.iter().map(|path| Path::new(path)).collect();
+        let worker = PocWorker::new(dirs);
+        self.gene
+            .push_worker(worker)
+            .map_err(|err| ValueError::py_err(err))?;
+        Ok(())
+    }
+
+    fn remove_worker(&mut self, flag: u8) -> PyResult<()> {
+        let flag = BlockFlag::from_int(flag).map_err(|err| AssertionError::py_err(err))?;
+        self.gene.remove_worker(&flag);
+        Ok(())
+    }
+
+    fn generate_work(&mut self, py: Python) {
+        self.tmp_info.replace(self.gene.get_worker_info());
+
+        let mut future = self.gene.throw_task();
+
+        // release python's GIL and wait for threads finish
+        py.allow_threads(|| {
+            future.wait();
+        });
+
+        let chain = self.chain.lock().unwrap();
+
+        // get mined block
+        let (_a, _b) = self.gene.future_result(&chain, future).unwrap();
+
+        // TODO: return full block?
+        unimplemented!()
     }
 }

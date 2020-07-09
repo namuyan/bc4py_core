@@ -5,6 +5,7 @@ use crate::tx::{TxInput, TxOutput, TxVerifiable};
 use crate::utils::*;
 use bigint::U256;
 use bloomfilter::Bloom;
+use std::collections::VecDeque;
 use std::fmt;
 use streaming_iterator::{DoubleEndedStreamingIterator, StreamingIterator};
 
@@ -16,7 +17,8 @@ struct Unconfirmed {
     hash: U256,                   // txhash
     depend_hashs: Box<[U256]>,    // input txhash
     depend_addrs: Bloom<Address>, // input & output addr
-    price: u64,
+    gas_price: u64,
+    gas_amount: i64,
     time: u32,
     deadline: u32,
     size: u32,
@@ -30,11 +32,123 @@ impl fmt::Debug for Unconfirmed {
     }
 }
 
-type TxsType = Vec<Option<Unconfirmed>>;
+type TxsType = VecDeque<Option<Unconfirmed>>;
 
 /// unconfirmed transaction's list
 #[derive(Debug)]
-struct Txs(TxsType);
+struct InnerTxs(TxsType);
+
+impl InnerTxs {
+    /// check exist the hash
+    fn exist(&self, hash: &U256) -> bool {
+        self.0
+            .iter()
+            .find(|tx| tx.is_some() && &tx.as_ref().unwrap().hash == hash)
+            .is_some()
+    }
+
+    /// get tx's position on unconfirmed
+    fn position(&self, hash: &U256) -> Option<usize> {
+        self.0
+            .iter()
+            .filter(|tx| tx.is_some())
+            .position(|tx| &tx.as_ref().unwrap().hash == hash)
+    }
+
+    /// remove tx or panic!
+    fn remove(&mut self, index: usize) -> Unconfirmed {
+        self.0
+            .iter_mut()
+            .filter(|tx| tx.is_some())
+            .nth(index)
+            .take()
+            .expect("index is out of bounds")
+            .take()
+            .expect("item is none but filtered?")
+    }
+
+    /// push an element to the back
+    fn push(&mut self, value: Unconfirmed) {
+        // note: rare case
+        self.0.push_back(Some(value));
+    }
+
+    /// insert a item before the index specified
+    fn insert(&mut self, index: usize, element: Unconfirmed) {
+        // get raw_index on txs
+        let raw_index = match self.0.iter().filter(|tx| tx.is_some()).nth(index) {
+            // note: item is some type
+            Some(item) => self.position(&item.as_ref().unwrap().hash).unwrap(),
+            None => {
+                if 0 < index {
+                    panic!("index is out of bounds");
+                } else {
+                    // vec is empty
+                    self.0.push_back(Some(element));
+                    return;
+                }
+            },
+        };
+
+        // check index-1 is none and replace
+        if 0 < raw_index {
+            let item = self.0.get_mut(raw_index - 1).unwrap();
+            if item.is_none() {
+                item.replace(element);
+                return;
+            }
+        }
+
+        // check index-2 is none and replace
+        if 1 < raw_index {
+            let back_index = raw_index - 2;
+            if self.0.get(back_index).unwrap().is_none() {
+                self.0.get_mut(back_index).unwrap().replace(element);
+                self.0.swap(back_index, raw_index - 1);
+                return;
+            }
+        }
+
+        // check index+1 is none and replace
+        if raw_index + 1 < self.0.len() {
+            let next_index = raw_index + 1;
+            if self.0.get(next_index).unwrap().is_none() {
+                self.0.get_mut(next_index).unwrap().replace(element);
+                self.0.swap(raw_index, next_index);
+                return;
+            }
+        }
+
+        // not found empty item near and insert
+        self.0.insert(raw_index, Some(element));
+    }
+
+    /// compact empty space of vec
+    #[allow(dead_code)]
+    fn compaction(&mut self) {
+        // fixme: once expand memory, don't release
+        unimplemented!()
+    }
+
+    /// total unconfirmed txs number
+    fn len(&self) -> usize {
+        self.0.iter().filter(|tx| tx.is_some()).count()
+    }
+
+    /// size hint (minimum, maximum)
+    #[allow(dead_code)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.0.len()))
+    }
+
+    /// iterate unconfirmed txs
+    fn streaming(&self) -> TxsIter {
+        TxsIter {
+            index: None,
+            vec: &self.0,
+        }
+    }
+}
 
 /// unconfirmed txs iter
 struct TxsIter<'a> {
@@ -103,142 +217,45 @@ impl DoubleEndedStreamingIterator for TxsIter<'_> {
     }
 }
 
+/// unconfirmed txs list
+pub struct UnconfirmedTxs {
+    /// unconfirmed hash vec
+    pub txs: Vec<U256>,
+    /// maximum time of the txs
+    pub time: u32,
+    /// minimum deadline of the txs
+    pub deadline: u32,
+    /// total txs reward (gas_price * gas_amount)
+    pub reward: u64,
+}
+
+impl UnconfirmedTxs {
+    /// make unconfirmed list for mining block's txs.
+    pub fn get_mining_block_txs(&self, coinbase: TxVerifiable, tables: &Tables) -> Vec<TxVerifiable> {
+        let mut txs = Vec::with_capacity(1 + self.txs.len());
+        txs.push(coinbase);
+        for hash in self.txs.iter() {
+            txs.push(
+                tables
+                    .read_txcache(hash)
+                    .unwrap()
+                    .expect("cannot read from txcache?"),
+            );
+        }
+        txs
+    }
+}
+
 /// unconfirmed is sorted by priority high to low
 #[derive(Debug)]
 pub struct UnconfirmedBuilder {
-    txs: Txs,
-}
-
-impl Txs {
-    /// check exist the hash
-    fn exist(&self, hash: &U256) -> bool {
-        self.0
-            .iter()
-            .find(|tx| tx.is_some() && &tx.as_ref().unwrap().hash == hash)
-            .is_some()
-    }
-
-    /// get tx's position on unconfirmed
-    fn position(&self, hash: &U256) -> Option<usize> {
-        self.0
-            .iter()
-            .filter(|tx| tx.is_some())
-            .position(|tx| &tx.as_ref().unwrap().hash == hash)
-    }
-
-    /// remove tx or panic!
-    fn remove(&mut self, index: usize) -> Unconfirmed {
-        self.0
-            .iter_mut()
-            .filter(|tx| tx.is_some())
-            .nth(index)
-            .take()
-            .expect("index is out of bounds")
-            .take()
-            .expect("item is none but filtered?")
-    }
-
-    /// push an element to the back
-    fn push(&mut self, value: Unconfirmed) {
-        // note: rare case
-        self.0.push(Some(value));
-    }
-
-    /// insert a item before the index specified
-    fn insert(&mut self, index: usize, element: Unconfirmed) {
-        // get raw_index on txs
-        let raw_index = match self.0.iter().filter(|tx| tx.is_some()).nth(index) {
-            // note: item is some type
-            Some(item) => self.position(&item.as_ref().unwrap().hash).unwrap(),
-            None => {
-                if 0 < index {
-                    panic!("index is out of bounds");
-                } else {
-                    // vec is empty
-                    self.0.push(Some(element));
-                    return;
-                }
-            },
-        };
-
-        // check index-1 is none and replace
-        if 0 < raw_index {
-            let item = self.0.get_mut(raw_index - 1).unwrap();
-            if item.is_none() {
-                item.replace(element);
-                return;
-            }
-        }
-
-        // check index-2 is none and replace
-        if 1 < raw_index {
-            let back_index = raw_index - 2;
-            if self.0.get(back_index).unwrap().is_none() {
-                self.0.get_mut(back_index).unwrap().replace(element);
-                self.0.swap(back_index, raw_index - 1);
-                return;
-            }
-        }
-
-        // check index+1 is none and replace
-        if raw_index + 1 < self.0.len() {
-            let next_index = raw_index + 1;
-            if self.0.get(next_index).unwrap().is_none() {
-                self.0.get_mut(next_index).unwrap().replace(element);
-                self.0.swap(raw_index, next_index);
-                return;
-            }
-        }
-
-        // not found empty item near and insert
-        self.0.insert(raw_index, Some(element));
-    }
-
-    /// compact empty space of vec
-    #[allow(dead_code)]
-    fn compaction(&mut self) {
-        // note: best empty space is same size of filled size
-        let mut reserve_num = self.len() as i32;
-        // note: beginning part should have empty space because of often edit and high cost to insert
-        self.0
-            .drain_filter(|tx| {
-                // drop if return true
-                if tx.is_none() {
-                    reserve_num -= 1;
-                    reserve_num < 0
-                } else {
-                    false
-                }
-            })
-            .for_each(drop);
-        // release memory
-        self.0.shrink_to_fit();
-    }
-
-    /// total unconfirmed txs number
-    fn len(&self) -> usize {
-        self.0.iter().filter(|tx| tx.is_some()).count()
-    }
-
-    /// size hint (minimum, maximum)
-    #[allow(dead_code)]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len(), Some(self.0.len()))
-    }
-
-    /// iterate unconfirmed txs
-    fn streaming(&self) -> TxsIter {
-        TxsIter {
-            index: None,
-            vec: &self.0,
-        }
-    }
+    txs: InnerTxs,
 }
 
 impl UnconfirmedBuilder {
     pub fn new() -> Self {
         UnconfirmedBuilder {
-            txs: Txs(Vec::with_capacity(100)),
+            txs: InnerTxs(VecDeque::with_capacity(100)),
         }
     }
 
@@ -319,7 +336,8 @@ impl UnconfirmedBuilder {
             hash,
             depend_hashs,
             depend_addrs,
-            price: tx.body.gas_price,
+            gas_price: tx.body.gas_price,
+            gas_amount: tx.body.gas_amount,
             time: tx.body.time,
             deadline: tx.body.deadline,
             size: tx.body.get_size() as u32,
@@ -398,21 +416,38 @@ impl UnconfirmedBuilder {
         Ok(())
     }
 
-    pub fn get_size_limit_list(&self, maxsize: u32) -> Vec<U256> {
+    pub fn get_best_unconfirmed_list(&self, maxsize: u32) -> UnconfirmedTxs {
         // size limit unconfirmed tx's tuple for mining interface
         // note: drain by deadline before call this method
         let mut size = 0;
-        let mut vec = Vec::with_capacity(3000);
+        let mut txs = Vec::with_capacity(3000);
+        let mut time = 0;
+        let mut deadline = u32::MAX;
+        let mut reward = 0;
         while let Some(unconfirmed) = self.txs.streaming().next() {
             size += unconfirmed.size;
             if size < maxsize {
-                vec.push(unconfirmed.hash.clone());
+                txs.push(unconfirmed.hash.clone());
+                if time < unconfirmed.time {
+                    time = unconfirmed.time;
+                }
+                if unconfirmed.deadline < deadline {
+                    deadline = unconfirmed.deadline;
+                }
+                if 0 < unconfirmed.gas_amount {
+                    reward += unconfirmed.gas_price * unconfirmed.gas_amount as u64;
+                }
             } else {
                 break;
             }
         }
-        vec.shrink_to_fit();
-        vec
+        txs.shrink_to_fit();
+        UnconfirmedTxs {
+            txs,
+            time,
+            deadline,
+            reward,
+        }
     }
 
     pub fn filtered_unconfirmed_iter(&self, filter: Option<Address>) -> UnconfirmedIter {
@@ -598,9 +633,9 @@ impl UnconfirmedBuilder {
             }
 
             // relative conditions
-            if unconfirmed.price < tx.price {
+            if unconfirmed.gas_price < tx.gas_price {
                 continue;
-            } else if unconfirmed.price == tx.price {
+            } else if unconfirmed.gas_price == tx.gas_price {
                 if unconfirmed.time >= tx.time {
                     continue;
                 }
